@@ -96,6 +96,8 @@ dist/
 build/
 .vite/
 .next/
+./docs/
+/docs/
 
 # TS incremental
 *.tsbuildinfo

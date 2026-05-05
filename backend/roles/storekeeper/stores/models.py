@@ -185,9 +185,12 @@ class ReceivingHistory(models.Model):
     storeLocation = models.CharField(max_length=100)
     items = models.IntegerField(default=0, blank=True, null=True)
     amount = models.CharField(max_length=100, blank=True, null=True) # E.g., KES 45,000 or numeric
+    totalValue = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True)
+    signaturePlacement = models.JSONField(blank=True, null=True, default=dict)
     status = models.CharField(max_length=100, default='Posted')
     storekeeperSignature = models.CharField(max_length=100, blank=True, null=True)
     signedAt = models.CharField(max_length=100, blank=True, null=True)
+    storekeeperId = models.CharField(max_length=100, blank=True, null=True)
     createdAt = models.DateTimeField(auto_now_add=True, blank=True, null=True)
 
     def save(self, *args, **kwargs):
@@ -211,13 +214,20 @@ class ReceivingHistory(models.Model):
 class Supplier(models.Model):
     id = models.CharField(max_length=50, primary_key=True) # SUP001
     name = models.CharField(max_length=255)
-    taxPin = models.CharField(max_length=50)
+    tradingName = models.CharField(max_length=255, blank=True, null=True)
+    taxPin = models.CharField(max_length=50) 
+    registrationNumber = models.CharField(max_length=100, blank=True, null=True)
     contactPerson = models.CharField(max_length=255)
     email = models.EmailField()
     status = models.CharField(max_length=50)
     # Procurement specific additions
     phone = models.CharField(max_length=50, blank=True, null=True)
     physicalAddress = models.TextField(blank=True, null=True)
+    postalAddress = models.TextField(blank=True, null=True)
+    bankName = models.CharField(max_length=255, blank=True, null=True)
+    bankBranch = models.CharField(max_length=255, blank=True, null=True)
+    bankAccountNumber = models.CharField(max_length=100, blank=True, null=True)
+    notes = models.TextField(blank=True, null=True)
     category = models.JSONField(default=list) # e.g. ["Supplies"]
     paymentTerms = models.CharField(max_length=100, blank=True, null=True)
     rating = models.DecimalField(max_digits=3, decimal_places=1, default=0.0)
@@ -366,6 +376,8 @@ class RiaItem(models.Model):
 
 class InventoryLedger(models.Model):
     itemCode = models.CharField(max_length=100, primary_key=True) # STA-001
+    # Optional FK to the InventoryItem to make lookups reliable.
+    item = models.ForeignKey('InventoryItem', related_name='ledgers', on_delete=models.SET_NULL, null=True, blank=True)
     itemName = models.CharField(max_length=255)
     unit = models.CharField(max_length=50)
     openingQty = models.IntegerField(default=0)
@@ -887,105 +899,3 @@ class ContractMilestone(models.Model):
 
     def __str__(self):
         return f"{self.contract.contractNumber} - {self.description}"
-
-
-# ─── S2 Permanent & Expendable Stores Ledger ──────────────────────────────────
-class S2LedgerEntry(models.Model):
-    """
-    Government S2 ledger row for permanent & expendable items (and reusable
-    institutional assets). Posted automatically by source workflows
-    (GRN, Issue Stock, Stock Transfers, Stock Adjustments) — entries are
-    immutable once written, mirroring LedgerReceipt/LedgerIssue semantics.
-    """
-
-    TXN_RECEIPT = "RECEIPT"
-    TXN_ISSUE = "ISSUE"
-    TXN_TRANSFER = "TRANSFER"
-    TXN_RETURN = "RETURN"
-    TXN_DAMAGE_LOSS = "DAMAGE_LOSS"
-    TXN_TYPE_CHOICES = [
-        (TXN_RECEIPT, "Receipt"),
-        (TXN_ISSUE, "Issue"),
-        (TXN_TRANSFER, "Transfer"),
-        (TXN_RETURN, "Return"),
-        (TXN_DAMAGE_LOSS, "Damage / Loss"),
-    ]
-
-    CONDITION_CHOICES = [
-        ("NEW", "New"),
-        ("GOOD", "Good"),
-        ("FAIR", "Fair"),
-        ("POOR", "Poor"),
-        ("DAMAGED", "Damaged"),
-        ("LOST", "Lost"),
-        ("OBSOLETE", "Obsolete"),
-        ("CONDEMNED", "Condemned"),
-    ]
-
-    LOSS_REASON_CHOICES = [
-        ("DAMAGED", "Damaged"),
-        ("LOST", "Lost"),
-        ("OBSOLETE", "Obsolete"),
-        ("CONDEMNED", "Condemned"),
-    ]
-
-    id = models.BigAutoField(primary_key=True)
-    date = models.DateField()
-    refNo = models.CharField(max_length=100)
-    txnType = models.CharField(max_length=20, choices=TXN_TYPE_CHOICES)
-
-    itemCode = models.CharField(max_length=100)
-    itemName = models.CharField(max_length=255)
-    category = models.CharField(max_length=100, blank=True, default="")
-    unit = models.CharField(max_length=50, blank=True, default="")
-
-    qtyReceived = models.IntegerField(default=0)
-    qtyIssued = models.IntegerField(default=0)
-    runningBalance = models.IntegerField(default=0)
-
-    unitCost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    totalValue = models.DecimalField(max_digits=14, decimal_places=2, default=0)
-
-    supplier = models.CharField(max_length=255, blank=True, default="")
-    recipient = models.CharField(max_length=255, blank=True, default="")
-    department = models.CharField(max_length=255, blank=True, default="")
-
-    fromDept = models.CharField(max_length=255, blank=True, default="")
-    toDept = models.CharField(max_length=255, blank=True, default="")
-    lossReason = models.CharField(max_length=20, choices=LOSS_REASON_CHOICES, blank=True, default="")
-
-    condition = models.CharField(max_length=20, choices=CONDITION_CHOICES, default="GOOD")
-    remarks = models.TextField(blank=True, default="")
-
-    createdBy = models.CharField(max_length=255, blank=True, default="")
-    approvedBy = models.CharField(max_length=255, blank=True, default="")
-    createdAt = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ["date", "id"]
-        indexes = [
-            models.Index(fields=["itemCode"]),
-            models.Index(fields=["txnType"]),
-            models.Index(fields=["date"]),
-        ]
-
-    def clean(self):
-        super().clean()
-        if self.pk is not None:
-            orig = S2LedgerEntry.objects.get(pk=self.pk)
-            if (
-                orig.date != self.date
-                or orig.qtyReceived != self.qtyReceived
-                or orig.qtyIssued != self.qtyIssued
-                or orig.unitCost != self.unitCost
-                or orig.runningBalance != self.runningBalance
-            ):
-                from django.core.exceptions import ValidationError
-                raise ValidationError("S2LedgerEntry rows are immutable after posting.")
-
-    def save(self, *args, **kwargs):
-        self.full_clean()
-        super().save(*args, **kwargs)
-
-    def __str__(self):
-        return f"{self.refNo} ({self.txnType}) {self.itemCode}"

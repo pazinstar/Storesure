@@ -671,7 +671,7 @@ export default function LPOManagementPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              KES {(stats.totalValue / 1000000).toFixed(1)}M
+              KES {Number(stats.totalValue || 0).toLocaleString("en-KE", { minimumFractionDigits: 2 })}
             </div>
             <p className="text-xs text-muted-foreground">Committed this year</p>
           </CardContent>

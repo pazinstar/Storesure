@@ -22,6 +22,12 @@ class InventoryListView(generics.ListCreateAPIView):
     queryset = InventoryItem.objects.all().order_by('-createdAt', '-id')
     serializer_class = InventoryItemSerializer
 
+
+class InventoryDetailView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = InventoryItem.objects.all()
+    serializer_class = InventoryItemSerializer
+    lookup_field = 'id'
+
 class StoreItemListView(generics.ListAPIView):
     from .serializers import StoreItemSerializer
     queryset = InventoryItem.objects.all().order_by('-createdAt')#, '-id')
@@ -53,8 +59,63 @@ class InventoryExportView(generics.GenericAPIView):
 
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.db import transaction
+from django.core.mail import send_mail
+from django.conf import settings
+import logging
 
 from .models import InventorySetting
+
+from django.db.models import Sum
+
+
+class ReceivingStatsView(APIView):
+    """GET /receive/stats/ - return counts and totals for GRN dashboard cards"""
+    def get(self, request, *args, **kwargs):
+        from django.utils import timezone
+        now = timezone.now()
+        year = now.year
+        month = now.month
+
+        this_month_count = ReceivingHistory.objects.filter(date__year=year, date__month=month).count()
+        drafts_count = ReceivingHistory.objects.filter(status__iexact='Draft').count()
+        pending_count = ReceivingHistory.objects.filter(status__iexact='Submitted').count()
+        posted_count = ReceivingHistory.objects.filter(status__iexact='Posted').count()
+
+        total_value_agg = ReceivingHistory.objects.aggregate(total=Sum('totalValue'))
+        total_value = total_value_agg.get('total') or 0
+
+        return Response({
+            'thisMonth': this_month_count,
+            'drafts': drafts_count,
+            'pending': pending_count,
+            'posted': posted_count,
+            'totalValue': float(total_value),
+        })
+
+
+class IssueStatsView(APIView):
+    """GET /issue/stats/ - return counts and totals for Issue (S13) dashboard cards"""
+    def get(self, request, *args, **kwargs):
+        from django.utils import timezone
+        now = timezone.now()
+        year = now.year
+        month = now.month
+
+        this_month_count = IssueHistory.objects.filter(date__year=year, date__month=month).count()
+        pending_count = IssueHistory.objects.filter(status__iexact='Pending').count()
+        # distinct departments
+        departments_count = IssueHistory.objects.values('department').distinct().count()
+        # total items issued (sum of items field)
+        items_agg = IssueHistory.objects.aggregate(total=Sum('items'))
+        items_issued = items_agg.get('total') or 0
+
+        return Response({
+            'thisMonth': this_month_count,
+            'pending': pending_count,
+            'departments': departments_count,
+            'itemsIssued': int(items_issued),
+        })
 
 class InventorySettingsView(APIView):
     def get(self, request, *args, **kwargs):
@@ -97,6 +158,113 @@ class InventorySettingsView(APIView):
                 
         return Response(settings_map)
 
+class RequestersListView(APIView):
+    """Return a lightweight list of system users suitable for 'Requested by' dropdown."""
+    def get(self, request, *args, **kwargs):
+        from roles.admin.users.models import SystemUser
+        # Only active users
+        users = SystemUser.objects.filter(status__iexact='active').order_by('first_name')
+        result = []
+        for u in users:
+            result.append({'id': u.id, 'name': f"{u.first_name} {u.last_name}".strip(), 'email': u.email})
+        return Response(result)
+
+
+class DashboardTransactionsView(APIView):
+    """Return a short list of recent transactions (S11 receipts and S13 issues)"""
+    def get(self, request, *args, **kwargs):
+        # Recent Deliveries (S11/GRN)
+        deliveries = Delivery.objects.all().order_by('-createdAt')[:10]
+        delivery_rows = []
+        for d in deliveries:
+            items = d.items if isinstance(d.items, list) else []
+            qty = 0
+            if isinstance(items, list):
+                try:
+                    qty = sum(int(it.get('quantity', it.get('qty', 0)) or 0) for it in items)
+                except Exception:
+                    qty = len(items)
+            delivery_rows.append({
+                'id': d.id,
+                'type': 'S11',
+                'item': d.lpoReference or (items[0].get('itemName') if items else 'Delivery'),
+                'qty': qty,
+                'date': d.dateTime.isoformat() if d.dateTime else (d.createdAt.isoformat() if d.createdAt else ''),
+                'status': d.status or 'Completed'
+            })
+
+        # Recent Issues (S13)
+        issues = IssueHistory.objects.all().order_by('-createdAt')[:10]
+        issue_rows = []
+        for i in issues:
+            issue_rows.append({
+                'id': i.id,
+                'type': 'S13',
+                'item': i.department or 'Issue',
+                'qty': int(i.items or 0),
+                'date': i.date.isoformat() if i.date else (i.createdAt.isoformat() if i.createdAt else ''),
+                'status': i.status or 'Completed'
+            })
+
+        # Merge and sort by date (descending)
+        rows = sorted(delivery_rows + issue_rows, key=lambda r: r.get('date') or '', reverse=True)
+        return Response(rows[:10])
+
+
+class DashboardLowStockView(APIView):
+    """Return a list of low stock items for dashboard"""
+    def get(self, request, *args, **kwargs):
+        # Consider items whose openingBalance <= minimumStockLevel or reorderLevel
+        items = InventoryItem.objects.filter(openingBalance__lte=models.F('minimumStockLevel')).order_by('openingBalance')[:20]
+        result = []
+        for it in items:
+            result.append({
+                'id': it.id,
+                'name': it.name,
+                'minimum': it.minimumStockLevel,
+                'unit': it.unit,
+                'current': it.openingBalance
+            })
+        return Response(result)
+
+
+class DashboardStatsView(APIView):
+    """Return aggregated stats for dashboard cards"""
+    def get(self, request, *args, **kwargs):
+        from django.db.models import Count
+
+        total_items = InventoryItem.objects.count()
+        low_stock_count = InventoryItem.objects.filter(openingBalance__lte=models.F('minimumStockLevel')).count()
+
+        from django.utils import timezone
+        now = timezone.now()
+        year = now.year
+        month = now.month
+
+        s11_count = ReceivingHistory.objects.filter(date__year=year, date__month=month).count()
+        s13_count = IssueHistory.objects.filter(date__year=year, date__month=month).count()
+
+        # Stock value from InventoryLedger closingValue
+        try:
+            from .models import InventoryLedger
+            from django.db.models import Sum
+            sv = InventoryLedger.objects.aggregate(total=Sum('closingValue')).get('total') or 0
+        except Exception:
+            sv = 0
+
+        categories_count = InventoryItem.objects.values('category').distinct().count()
+        pending_issues = IssueHistory.objects.filter(status__iexact='Pending').count()
+
+        return Response({
+            'totalItems': {'value': str(total_items), 'trend': '', 'trendUp': True},
+            'lowStockItems': {'value': str(low_stock_count), 'trend': '', 'trendUp': False},
+            's11ThisMonth': {'value': str(s11_count), 'trend': '', 'trendUp': True},
+            's13ThisMonth': {'value': str(s13_count), 'trend': '', 'trendUp': True},
+            'stockValue': f"KES {float(sv):,.2f}",
+            'categories': str(categories_count),
+            'pendingIssues': str(pending_issues),
+        })
+
 class DeliveriesListView(generics.ListCreateAPIView):
     queryset = Delivery.objects.all().order_by('-createdAt', '-id')
     serializer_class = DeliverySerializer
@@ -127,13 +295,17 @@ class DeliverySubmitDecisionView(generics.UpdateAPIView):
             'reject_all': 'Rejected'
         }
         if decision in status_map:
-            serializer.validated_data['status'] = status_map[decision]
-        serializer.save()
+            # Save status explicitly via serializer.save to ensure it is persisted
+            serializer.save(status=status_map[decision])
+        else:
+            serializer.save()
 
 class DeliverySignDecisionView(APIView):
     def post(self, request, pk, format=None):
-        from .models import Delivery
+        from .models import Delivery, InventoryLedger, LedgerReceipt, InventoryItem
         from rest_framework import status
+        import json, uuid
+
         try:
             delivery = Delivery.objects.get(id=pk)
         except Delivery.DoesNotExist:
@@ -154,76 +326,75 @@ class DeliverySignDecisionView(APIView):
         }
 
         # Check if the role already signed to update it, or append
-        signatures = delivery.signatures
-        if not isinstance(signatures, list):
-            signatures = []
-            
+        signatures = delivery.signatures if isinstance(delivery.signatures, list) else []
+
         updated = False
         for sig in signatures:
             if sig.get('memberRole') == member_role:
                 sig.update(new_signature)
                 updated = True
                 break
-                
+
         if not updated:
             signatures.append(new_signature)
-            
+
         delivery.signatures = signatures
-        
+
         # Check if all 3 roles have signed
         roles_required = {'Storekeeper', 'Bursar', 'Headteacher'}
         signed_roles = {sig.get('memberRole') for sig in signatures if sig.get('signed')}
-        
+
         if roles_required.issubset(signed_roles):
             delivery.inspectionCompletedAt = timezone.now()
-            delivery.status = "Accepted"
-            
+            delivery.status = 'Accepted'
+
             # Government Ledger Generation Logic
             if not delivery.grnGenerated:
-                import uuid
-                from .models import InventoryLedger, LedgerReceipt, InventoryItem
-                import json
-                
-                delivery.grnGenerated = True
-                delivery.grnId = f"GRN-{timezone.now().year}-{str(uuid.uuid4())[:4].upper()}"
-                
-                items = delivery.items if isinstance(delivery.items, list) else []
-                if isinstance(items, str):
-                    try:
-                        items = json.loads(items)
-                    except:
-                        items = []
-                        
-                for item_data in items:
-                    item_code = item_data.get('itemCode') or item_data.get('id')
-                    try:
-                        qty = int(item_data.get('quantity', item_data.get('qty', 0)))
-                        unit_cost = float(item_data.get('unitPrice', item_data.get('unitCost', item_data.get('rate', 0))))
-                    except (ValueError, TypeError):
-                        qty, unit_cost = 0, 0
-                        
-                    if item_code and qty > 0:
+                with transaction.atomic():
+                    delivery.grnGenerated = True
+                    delivery.grnId = f"GRN-{timezone.now().year}-{str(uuid.uuid4())[:4].upper()}"
+
+                    items = delivery.items if isinstance(delivery.items, list) else []
+                    if isinstance(items, str):
+                        try:
+                            items = json.loads(items)
+                        except Exception:
+                            items = []
+
+                    for item_data in items:
+                        item_code = item_data.get('itemCode') or item_data.get('id')
+                        try:
+                            qty = int(item_data.get('quantity', item_data.get('qty', 0)))
+                        except (ValueError, TypeError):
+                            qty = 0
+                        try:
+                            unit_cost = float(item_data.get('unitPrice', item_data.get('unitCost', item_data.get('rate', 0))))
+                        except (ValueError, TypeError):
+                            unit_cost = 0
+
+                        if not item_code or qty <= 0:
+                            continue
+
                         inventory_item = InventoryItem.objects.filter(id=item_code).first()
                         item_name = inventory_item.name if inventory_item else item_data.get('itemName', item_code)
                         unit = inventory_item.unit if inventory_item else item_data.get('unit', 'Unit')
-                        
-                        # Find or create ledger
-                        ledger, created = InventoryLedger.objects.get_or_create(
-                            itemCode=item_code,
-                            defaults={
-                                'itemName': item_name,
-                                'unit': unit,
-                                'openingQty': 0, 'openingValue': 0,
-                                'totalReceiptsQty': 0, 'totalReceiptsValue': 0,
-                                'totalIssuesQty': 0, 'totalIssuesValue': 0,
-                                'closingQty': 0, 'closingValue': 0,
-                            }
-                        )
-                        
+
+                        ledger = InventoryLedger.objects.select_for_update().filter(itemCode=item_code).first()
+                        if not ledger:
+                            ledger = InventoryLedger.objects.create(
+                                itemCode=item_code,
+                                item=inventory_item if inventory_item else None,
+                                itemName=item_name,
+                                unit=unit,
+                                openingQty=0, openingValue=0,
+                                totalReceiptsQty=0, totalReceiptsValue=0,
+                                totalIssuesQty=0, totalIssuesValue=0,
+                                closingQty=0, closingValue=0,
+                            )
+
                         new_balance = ledger.closingQty + qty
                         total_cost = qty * unit_cost
-                        
-                        # Create LedgerReceipt first to trigger immutability hooks, etc
+
                         LedgerReceipt.objects.create(
                             ledger=ledger,
                             date=timezone.now().date(),
@@ -232,21 +403,34 @@ class DeliverySignDecisionView(APIView):
                             unitCost=unit_cost,
                             totalCost=total_cost,
                             supplierName=delivery.supplierName,
-                            requisitionNo=delivery.lpoReference, # Usually mapped via LPO when req missing
+                            requisitionNo=delivery.lpoReference,
                             balanceInStock=new_balance,
                             signatures=json.dumps(signatures)
                         )
 
-                        # Update Ledger Aggregates
                         ledger.totalReceiptsQty += qty
                         ledger.totalReceiptsValue += total_cost
                         ledger.closingQty = new_balance
                         ledger.closingValue += total_cost
                         ledger.save()
-            
+
+                        # Keep InventoryItem.openingBalance in sync with ledger closing quantity
+                        try:
+                            inv_item = None
+                            if ledger.item:
+                                inv_item = ledger.item
+                            else:
+                                from .models import InventoryItem
+                                inv_item = InventoryItem.objects.filter(id=ledger.itemCode).first()
+                            if inv_item:
+                                inv_item.openingBalance = ledger.closingQty
+                                inv_item.save()
+                        except Exception:
+                            # Do not block the main flow if inventory sync fails
+                            pass
+
         delivery.save()
-        
-        # Return updated delivery details
+
         from .serializers import DeliverySerializer
         serializer = DeliverySerializer(delivery)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -254,6 +438,21 @@ class DeliverySignDecisionView(APIView):
 class RequisitionsListView(generics.ListAPIView):
     queryset = Requisition.objects.all()
     serializer_class = RequisitionSerializer
+
+class IssueHistoryListView(generics.ListCreateAPIView):
+    queryset = IssueHistory.objects.all().order_by('-createdAt', '-id')
+    serializer_class = IssueHistorySerializer
+
+    def perform_create(self, serializer):
+        try:
+            logging.getLogger('django.request').debug(f"Incoming S13 POST data: {self.request.data}")
+        except Exception:
+            pass
+        serializer.save()
+
+class ReceivingHistoryListView(generics.ListCreateAPIView):
+    queryset = ReceivingHistory.objects.all().order_by('-createdAt', '-id')
+    serializer_class = ReceivingHistorySerializer
 
 class S12RequisitionListCreateView(generics.ListCreateAPIView):
     from .serializers import S12RequisitionSerializer
@@ -269,85 +468,110 @@ class S12RequisitionDetailView(generics.RetrieveUpdateDestroyAPIView):
     def perform_update(self, serializer):
         from django.utils import timezone
         from .models import InventoryLedger, LedgerIssue, IssueHistory
-        
+        from rest_framework.exceptions import ValidationError
+
         instance = self.get_object()
         was_not_fully_signed = not (instance.receiverSignature and instance.issuerSignature)
-        
+
         updated_instance = serializer.save()
-        
+
         is_fully_signed = updated_instance.receiverSignature and updated_instance.issuerSignature
-        
-        # When both rules hold, generate immutable LedgerIssue entries
-        # Ensures Rule 2 (Transactions create ledger lines) & Rule 4 (Mandatory Signatures)
+
+        # When signatures change to issuing state, generate immutable LedgerIssue entries
+        # Process either when both signatures are now present, or when issuer signature was newly applied.
+        # Avoid double-processing by checking for existing LedgerIssue rows for this requisition number.
+        from .models import LedgerIssue
+        should_process = False
         if was_not_fully_signed and is_fully_signed:
-            s13 = IssueHistory.objects.create(
-                date=timezone.now().date(),
-                department=updated_instance.requestingDepartment,
-                requestedBy=updated_instance.requestedBy,
-                items=updated_instance.items.count(),
-                status="Issued"
-            )
-            
-            for req_item in updated_instance.items.all():
-                qty = req_item.quantityIssued if req_item.quantityIssued > 0 else req_item.quantityApproved
-                
-                if qty > 0 and req_item.itemCode:
-                    item_code = req_item.itemCode.id
-                    unit_cost = float(req_item.unitPrice)
-                    total_cost = qty * unit_cost
-                    
-                    ledger, _ = InventoryLedger.objects.get_or_create(
-                        itemCode=item_code,
-                        defaults={
-                            'itemName': req_item.itemCode.name,
-                            'unit': req_item.unit,
-                            'openingQty': 0, 'openingValue': 0,
-                            'totalReceiptsQty': 0, 'totalReceiptsValue': 0,
-                            'totalIssuesQty': 0, 'totalIssuesValue': 0,
-                            'closingQty': 0, 'closingValue': 0,
-                        }
-                    )
-                    
-                    new_balance = ledger.closingQty - qty
-                    
-                    if new_balance < 0:
-                        from rest_framework.exceptions import ValidationError
-                        raise ValidationError(
-                            f"Negative inventory balance prevented for {req_item.itemCode.name}. "
-                            f"Available: {ledger.closingQty}, issuing: {qty}."
+            should_process = True
+        else:
+            # issuerSignature newly applied (even if receiverSignature not set)
+            if (not instance.issuerSignature) and updated_instance.issuerSignature:
+                # Only process if no ledger issues exist for this requisition
+                existing = LedgerIssue.objects.filter(requisitionNo=updated_instance.s12Number).exists()
+                if not existing:
+                    should_process = True
+
+        if should_process:
+            with transaction.atomic():
+                s13 = IssueHistory.objects.create(
+                    date=timezone.now().date(),
+                    department=updated_instance.requestingDepartment,
+                    requestedBy=updated_instance.requestedBy,
+                    items=updated_instance.items.count(),
+                    status="Issued"
+                )
+
+                for req_item in updated_instance.items.all():
+                    qty = req_item.quantityIssued if req_item.quantityIssued > 0 else req_item.quantityApproved
+
+                    if qty > 0 and req_item.itemCode:
+                        item_code = req_item.itemCode.id
+                        unit_cost = float(req_item.unitPrice)
+                        total_cost = qty * unit_cost
+
+                        # Lock existing ledger row if present
+                        ledger = InventoryLedger.objects.select_for_update().filter(itemCode=item_code).first()
+                        if not ledger:
+                            # Create ledger and link to item
+                            ledger = InventoryLedger.objects.create(
+                                itemCode=item_code,
+                                item=req_item.itemCode,
+                                itemName=req_item.itemCode.name,
+                                unit=req_item.unit,
+                                openingQty=0, openingValue=0,
+                                totalReceiptsQty=0, totalReceiptsValue=0,
+                                totalIssuesQty=0, totalIssuesValue=0,
+                                closingQty=0, closingValue=0,
+                            )
+
+                        new_balance = ledger.closingQty - qty
+
+                        if new_balance < 0:
+                            raise ValidationError(
+                                f"Negative inventory balance prevented for {req_item.itemCode.name}. "
+                                f"Available: {ledger.closingQty}, issuing: {qty}."
+                            )
+
+                        sig_str = f"Storekeeper: Yes | Recipient ({updated_instance.requestedBy}): Yes"
+
+                        LedgerIssue.objects.create(
+                            ledger=ledger,
+                            date=timezone.now().date(),
+                            s13No=s13.id,
+                            qty=qty,
+                            dept=updated_instance.requestingDepartment,
+                            unitCost=unit_cost,
+                            totalCost=total_cost,
+                            requisitionNo=updated_instance.s12Number,
+                            balanceInStock=new_balance,
+                            signature=sig_str
                         )
-                        
-                    sig_str = f"Storekeeper: Yes | Recipient ({updated_instance.requestedBy}): Yes"
-                    
-                    LedgerIssue.objects.create(
-                        ledger=ledger,
-                        date=timezone.now().date(),
-                        s13No=s13.id,
-                        qty=qty,
-                        dept=updated_instance.requestingDepartment,
-                        unitCost=unit_cost,
-                        totalCost=total_cost,
-                        requisitionNo=updated_instance.s12Number,
-                        balanceInStock=new_balance,
-                        signature=sig_str
-                    )
-                    
-                    ledger.totalIssuesQty += qty
-                    ledger.totalIssuesValue += total_cost
-                    ledger.closingQty = new_balance
-                    ledger.closingValue -= total_cost
-                    ledger.save()
-            
-            updated_instance.status = "Fully Issued"
-            updated_instance.save()
 
-class IssueHistoryListView(generics.ListCreateAPIView):
-    queryset = IssueHistory.objects.all().order_by('-createdAt', '-id')
-    serializer_class = IssueHistorySerializer
+                        ledger.totalIssuesQty += qty
+                        ledger.totalIssuesValue += total_cost
+                        ledger.closingQty = new_balance
+                        ledger.closingValue -= total_cost
+                        ledger.save()
 
-class ReceivingHistoryListView(generics.ListCreateAPIView):
-    queryset = ReceivingHistory.objects.all().order_by('-createdAt', '-id')
-    serializer_class = ReceivingHistorySerializer
+                        # Keep InventoryItem.openingBalance in sync with ledger closing quantity
+                        try:
+                            inv_item = None
+                            if ledger.item:
+                                inv_item = ledger.item
+                            else:
+                                from .models import InventoryItem
+                                inv_item = InventoryItem.objects.filter(id=ledger.itemCode).first()
+                            if inv_item:
+                                inv_item.openingBalance = ledger.closingQty
+                                inv_item.save()
+                        except Exception:
+                            # Do not block the main flow if inventory sync fails
+                            pass
+
+                updated_instance.status = "Fully Issued"
+                updated_instance.save()
+                
 
 class ReceivingHistoryDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = ReceivingHistory.objects.all()
@@ -369,9 +593,15 @@ from .serializers import (
     StoreReportSerializer
 )
 
-class SupplierListView(generics.ListAPIView):
+class SupplierListView(generics.ListCreateAPIView):
+    queryset = Supplier.objects.all().order_by('-createdAt')
+    serializer_class = SupplierSerializer
+
+
+class SupplierDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Supplier.objects.all()
     serializer_class = SupplierSerializer
+    lookup_field = 'id'
 
 class LpoListCreateView(generics.ListCreateAPIView):
     from .serializers import PurchaseOrderSerializer
@@ -383,6 +613,70 @@ class LpoDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = PurchaseOrder.objects.all()
     serializer_class = PurchaseOrderSerializer
     lookup_field = 'id'
+
+
+class LpoSendView(APIView):
+    """POST /lpos/<id>/send/ -- mark LPO as sent and send notification email to supplier"""
+    def post(self, request, id, format=None):
+        from rest_framework import status
+        try:
+            po = PurchaseOrder.objects.get(id=id)
+        except PurchaseOrder.DoesNotExist:
+            return Response({'detail': 'Purchase order not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Allow sending even when draft
+        po.status = 'Sent'
+        po.save()
+
+        # Attempt to send an email to supplier if supplierEmail is present
+        supplier_email = getattr(po, 'supplierEmail', None) or getattr(po, 'supplierEmail', None)
+        subject = f"LPO {po.lpoNumber} sent"
+        body = f"Purchase Order {po.lpoNumber} has been sent to supplier {po.supplierName}."
+        try:
+            if supplier_email:
+                send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [supplier_email], fail_silently=True)
+        except Exception as e:
+            logging.exception('Error sending LPO email')
+
+        from .serializers import PurchaseOrderSerializer
+        return Response(PurchaseOrderSerializer(po).data, status=200)
+
+
+class DeliveryReminderView(APIView):
+    """POST /deliveries/<id>/reminder/ -- send reminder emails to inspection committee or unsigned roles"""
+    def post(self, request, id, format=None):
+        from rest_framework import status
+        from roles.admin.dashboard.models import InspectionCommittee
+        from roles.admin.users.models import SystemUser
+
+        try:
+            delivery = Delivery.objects.get(id=id)
+        except Delivery.DoesNotExist:
+            return Response({'detail': 'Delivery not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        committee = InspectionCommittee.objects.prefetch_related('members').first()
+        if not committee:
+            return Response({'detail': 'Inspection committee not configured.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        emails = []
+        for member in committee.members.all():
+            try:
+                su = SystemUser.objects.get(id=member.user_id)
+                if su and su.email:
+                    emails.append(su.email)
+            except SystemUser.DoesNotExist:
+                continue
+
+        subject = f"Reminder: Delivery {getattr(delivery, 'deliveryId', delivery.id)} awaiting inspection"
+        body = f"The delivery {getattr(delivery, 'deliveryId', delivery.id)} requires your inspection action.\n\nPlease log in to the system to review and sign."
+
+        try:
+            if emails:
+                send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, list(set(emails)), fail_silently=True)
+        except Exception:
+            logging.exception('Error sending delivery reminder emails')
+
+        return Response({'sent': len(emails)}, status=200)
 
 class LpoStatsView(APIView):
     def get(self, request, *args, **kwargs):
@@ -407,6 +701,15 @@ class LpoStatsView(APIView):
 class RiaListCreateView(generics.ListCreateAPIView):
     queryset = RoutineIssueAuthority.objects.all().order_by('-createdAt', '-number')
     serializer_class = RoutineIssueAuthoritySerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        # Support returning all records explicitly via query param
+        all_flag = self.request.query_params.get('all')
+        if all_flag and all_flag.lower() in ('1', 'true', 'yes'):
+            return qs
+        # Default: return active/draft RIAs
+        return qs.exclude(status__iexact='archived')
 
 class RiaDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = RoutineIssueAuthority.objects.all()
@@ -667,24 +970,3 @@ class DisposalRecordListCreateView(generics.ListCreateAPIView):
     from .serializers import DisposalRecordSerializer
     queryset = DisposalRecord.objects.all().order_by('-id')
     serializer_class = DisposalRecordSerializer
-
-
-class S2LedgerListView(generics.ListAPIView):
-    """
-    Read-only list of S2 (Permanent & Expendable) ledger entries.
-    Supports filters: ?item=<itemCode>&type=<RECEIPT|ISSUE|TRANSFER|RETURN|DAMAGE_LOSS>
-    """
-    from .models import S2LedgerEntry
-    from .serializers import S2LedgerEntrySerializer
-    serializer_class = S2LedgerEntrySerializer
-
-    def get_queryset(self):
-        from .models import S2LedgerEntry
-        qs = S2LedgerEntry.objects.all().order_by('date', 'id')
-        item = self.request.query_params.get('item')
-        txn_type = self.request.query_params.get('type')
-        if item and item != 'ALL':
-            qs = qs.filter(itemCode=item)
-        if txn_type and txn_type != 'ALL':
-            qs = qs.filter(txnType=txn_type)
-        return qs

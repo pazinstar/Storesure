@@ -54,6 +54,12 @@ export default function IssueStock() {
     queryFn: () => api.getInventorySettings()
   });
 
+  const { data: s13Stats } = useQuery({
+    queryKey: ['s13-stats'],
+    queryFn: () => api.getS13Stats(),
+    staleTime: 1000 * 60,
+  });
+
   const departments = settings?.departmentLocations || [];
 
   const [records, setRecords] = useState<S13Record[]>([]);
@@ -65,6 +71,8 @@ export default function IssueStock() {
   }, [initialRecords]);
 
   const [searchTerm, setSearchTerm] = useState("");
+  const [viewDialogOpen, setViewDialogOpen] = useState(false);
+  const [selectedRecord, setSelectedRecord] = useState<S13Record | null>(null);
   const [issueDialogOpen, setIssueDialogOpen] = useState(false);
   const [printDialogOpen, setPrintDialogOpen] = useState(false);
   const [printData, setPrintData] = useState<S13PrintData | null>(null);
@@ -80,14 +88,67 @@ export default function IssueStock() {
   const [riaIssued, setRiaIssued] = useState<Record<string, number>>({});
   const [selectedReqId, setSelectedReqId] = useState<string>("");
   const [issuedQuantities, setIssuedQuantities] = useState<Record<string, number>>({});
+  const [inventoryItemsMap, setInventoryItemsMap] = useState<Record<string, any>>({});
+  const [s13Date, setS13Date] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [departmentInput, setDepartmentInput] = useState<string>("");
+  const [requestedByInput, setRequestedByInput] = useState<string>("");
+  const [purposeInput, setPurposeInput] = useState<string>("");
   const pendingRequisitions = getPendingIssues();
   const selectedReq = selectedReqId ? getRequisitionById(selectedReqId) : undefined;
+
+  useEffect(() => {
+    if (selectedReq) {
+      setDepartmentInput(selectedReq.requestingDepartment || "");
+      setRequestedByInput(selectedReq.requestedBy || "");
+    } else {
+      setDepartmentInput("");
+      setRequestedByInput("");
+    }
+  }, [selectedReq]);
+
+  // When a requisition is selected, fetch the current inventory items for each requisition item
+  useEffect(() => {
+    let mounted = true;
+    const loadInventoryItems = async () => {
+      if (!selectedReq || !selectedReq.items || selectedReq.items.length === 0) {
+        setInventoryItemsMap({});
+        return;
+      }
+      try {
+        const results = await Promise.all(
+          selectedReq.items.map(async (it: any) => {
+            // itemCode may be an object or string depending on API/mocks
+            const code = it.itemCode && typeof it.itemCode === 'string' ? it.itemCode : (it.itemCode?.id || it.itemCode || it.id);
+            try {
+              const inv = await api.getItem(code);
+              return [code, inv];
+            } catch (err) {
+              return [code, null];
+            }
+          })
+        );
+
+        if (!mounted) return;
+        const map: Record<string, any> = {};
+        results.forEach(([code, inv]) => {
+          if (code) map[code] = inv;
+        });
+        setInventoryItemsMap(map);
+      } catch (e) {
+        setInventoryItemsMap({});
+      }
+    };
+
+    loadInventoryItems();
+    return () => { mounted = false; };
+  }, [selectedReq]);
 
   const createS13Mutation = useMutation({
     mutationFn: (newRecord: Omit<S13Record, "id">) => api.createS13Record(newRecord),
     onSuccess: (savedRecord) => {
-      setRecords([savedRecord, ...records]);
+      setRecords(prev => [savedRecord, ...prev]);
       queryClient.setQueryData(['s13-records'], (oldData: any) => [savedRecord, ...(oldData || [])]);
+      queryClient.invalidateQueries(['s13-records']);
       toast.success("Items issued successfully via API");
       addNotification({ title: "Stock Issued (S13)", message: `${savedRecord.id} — ${savedRecord.department}`, type: "success", link: "/stores/issue" });
       setIssueDialogOpen(false);
@@ -100,6 +161,86 @@ export default function IssueStock() {
       toast.error("Failed to create S13 record. Network error.");
     }
   });
+
+  const handleIssueNormal = () => {
+    if (!selectedReq) return;
+    const hasQty = Object.values(issuedQuantities).some((q) => q > 0);
+    if (!hasQty) {
+      toast.error("Enter quantities to issue");
+      return;
+    }
+
+    const invalid = selectedReq.items.some((it) => {
+      const approved = it.quantityApproved ?? it.quantityRequested;
+      const issued = it.quantityIssued ?? 0;
+      const balance = Math.max(approved - issued, 0);
+      const val = issuedQuantities[it.id] ?? 0;
+      return val > balance;
+    });
+    if (invalid) {
+      toast.error("One or more quantities exceed balance");
+      return;
+    }
+
+    const itemsCount = Object.values(issuedQuantities).reduce((s, v) => s + (Number(v) || 0), 0);
+
+    const newS13Record: Omit<S13Record, "id"> = {
+      date: s13Date,
+      department: selectedReq.requestingDepartment || departmentInput,
+      requestedBy: selectedReq.requestedBy || requestedByInput || user?.name || 'Storekeeper',
+      items: itemsCount,
+      status: "Issued",
+      purpose: purposeInput,
+    };
+
+    console.debug('S13 payload (normal):', newS13Record);
+
+    issueItems(selectedReq.id, user?.name || "Storekeeper", issuedQuantities);
+    logStoresAction("UPDATE", `Issued items for ${selectedReq.s12Number} via S13`);
+    createS13Mutation.mutate(newS13Record);
+  };
+
+  const handleIssueRIA = () => {
+    if (!selectedRIA) return;
+    const ria = activeRIAs.find(r => r.id === selectedRIA)!;
+    const hasQty = Object.values(riaIssued).some((q) => q > 0);
+    if (!hasQty) {
+      toast.error("Enter quantities to issue");
+      return;
+    }
+
+    const invalid = ria.items.some((it) => {
+      const available = it.approvedQty - it.usedQty;
+      const val = riaIssued[it.itemCode] ?? 0;
+      return val > available;
+    });
+    if (invalid) {
+      toast.error("One or more quantities exceed available");
+      return;
+    }
+
+    ria.items.forEach((it) => {
+      const val = riaIssued[it.itemCode] ?? 0;
+      if (val > 0) {
+        addUsage(ria.number, it.itemCode, val);
+      }
+    });
+
+    const riaItemsCount = Object.values(riaIssued).reduce((s, v) => s + (Number(v) || 0), 0);
+    const newS13Record: Omit<S13Record, "id"> = {
+      date: s13Date,
+      department: ria.department,
+      requestedBy: user?.name || "Staff",
+      items: riaItemsCount,
+      status: "Issued",
+      purpose: purposeInput,
+    };
+
+    console.debug('S13 payload (ria):', newS13Record);
+
+    logStoresAction("UPDATE", `Issued items from ${ria.number} via S13`);
+    createS13Mutation.mutate(newS13Record);
+  };
 
   const handlePrintS13 = (record: S13Record) => {
     // Create print data from the record
@@ -129,6 +270,13 @@ export default function IssueStock() {
     logStoresAction("S13 Printed", `Printed S13 record ${record.id}`);
   };
 
+  const handleViewS13 = (id: string) => {
+    const rec = records.find(r => r.id === id) || null;
+    setSelectedRecord(rec);
+    setViewDialogOpen(true);
+    logStoresAction("S13 Viewed", `Viewed S13 record ${id}`);
+  };
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "Issued":
@@ -148,7 +296,7 @@ export default function IssueStock() {
         <div>
           <h1 className="text-3xl font-bold text-foreground">Issue Stock (S13)</h1>
           <p className="text-muted-foreground mt-1">
-            Process stock requisitions and issue items to departments. Postings route by Asset Type — <span className="font-mono">Consumable</span> → S1 ledger; <span className="font-mono">Permanent / Expendable / Fixed Asset</span> → S2 ledger.
+            Process stock requisitions and issue items to departments
           </p>
         </div>
         <Dialog open={issueDialogOpen} onOpenChange={setIssueDialogOpen}>
@@ -187,43 +335,17 @@ export default function IssueStock() {
                   </label>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="s13-number">S13 Number</Label>
                   <Input id="s13-number" value="S13-2024-006" readOnly className="bg-muted" />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="issue-date">Date</Label>
-                  <Input id="issue-date" type="date" defaultValue="2024-01-16" />
+                  <Input id="issue-date" type="date" value={s13Date} onChange={(e) => setS13Date(e.target.value)} />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="department">Department</Label>
-                  <Select disabled={issueType === "ria" || !!selectedReq}>
-                    <SelectTrigger>
-                      <SelectValue placeholder={selectedReq ? selectedReq.requestingDepartment : "Select department"} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {departments.map((dept) => (
-                        <SelectItem key={dept} value={dept.toLowerCase().replace(/\s+/g, "-")}>
-                          {dept}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {selectedReq && (
-                    <p className="text-xs text-muted-foreground">From requisition: {selectedReq.requestingDepartment}</p>
-                  )}
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="requested-by">Requested By</Label>
-                  <Input id="requested-by" placeholder={selectedReq ? selectedReq.requestedBy : "Staff name"} disabled={issueType === "ria" || !!selectedReq} />
-                  {selectedReq && (
-                    <p className="text-xs text-muted-foreground">From requisition: {selectedReq.requestedBy}</p>
-                  )}
-                </div>
-              </div>
+              {/* Requisition/department/requestedBy group moved below requisition selector for clarity */}
               {issueType === "ria" && (
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2 col-span-2">
@@ -310,6 +432,35 @@ export default function IssueStock() {
                   </Select>
                 </div>
               )}
+
+              {/* Department and Requested By should reflect selected requisition when present */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="department">Department</Label>
+                  <Select value={departmentInput} onValueChange={(v) => setDepartmentInput(v)} disabled={issueType === "ria" || !!selectedReq}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={selectedReq ? selectedReq.requestingDepartment : "Select department"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {departments.map((dept) => (
+                        <SelectItem key={dept} value={dept}>
+                          {dept}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {selectedReq && (
+                    <p className="text-xs text-muted-foreground">From requisition: {selectedReq.requestingDepartment}</p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="requested-by">Requested By</Label>
+                  <Input id="requested-by" placeholder={selectedReq ? selectedReq.requestedBy : "Staff name"} value={requestedByInput} onChange={(e) => setRequestedByInput(e.target.value)} disabled={issueType === "ria" || !!selectedReq} />
+                  {selectedReq && (
+                    <p className="text-xs text-muted-foreground">From requisition: {selectedReq.requestedBy}</p>
+                  )}
+                </div>
+              </div>
               {issueType === "normal" && selectedReq && (
                 <div className="space-y-2">
                   <div className="rounded-md border">
@@ -325,31 +476,40 @@ export default function IssueStock() {
                       </TableHeader>
                       <TableBody>
                         {selectedReq.items.map((item) => {
-                          const approved = item.quantityApproved ?? item.quantityRequested;
-                          const issued = item.quantityIssued ?? 0;
-                          const balance = Math.max(approved - issued, 0);
-                          const val = issuedQuantities[item.id] ?? 0;
-                          const over = val > balance;
+                            const approved = item.quantityApproved ?? item.quantityRequested;
+                            const issued = item.quantityIssued ?? 0;
+                            const reqBalance = Math.max(approved - issued, 0);
+                            const inv = (() => {
+                              const code = item.itemCode && typeof item.itemCode === 'string' ? item.itemCode : (item.itemCode?.id || item.itemCode || item.id);
+                              return inventoryItemsMap[code];
+                            })();
+                            const stockAvailable = inv ? (inv.openingBalance ?? 0) : Infinity;
+                            const allowedMax = Math.min(reqBalance, stockAvailable);
+                            const val = issuedQuantities[item.id] ?? 0;
+                            const over = val > allowedMax;
                           return (
                             <TableRow key={item.id}>
                               <TableCell>{item.description}</TableCell>
                               <TableCell>{approved} {item.unit}</TableCell>
                               <TableCell>{issued} {item.unit}</TableCell>
-                              <TableCell className={balance === 0 ? "text-muted-foreground" : ""}>
-                                {balance} {item.unit}
+                              <TableCell className={reqBalance === 0 ? "text-muted-foreground" : ""}>
+                                {reqBalance} {item.unit}
+                                {inv && (
+                                  <div className="text-xs text-muted-foreground">In stock: {inv.openingBalance} {inv.unit}</div>
+                                )}
                               </TableCell>
                               <TableCell className="w-40">
                                 <Input
                                   type="number"
                                   min={0}
-                                  max={balance}
+                                  max={allowedMax}
                                   value={val}
                                   onChange={(e) => {
                                     const n = Math.max(0, Number(e.target.value));
                                     setIssuedQuantities((prev) => ({ ...prev, [item.id]: n }));
                                   }}
                                 />
-                                {over && <p className="text-xs text-destructive mt-1">Exceeds balance</p>}
+                                {over && <p className="text-xs text-destructive mt-1">Exceeds allowed (req/stock)</p>}
                               </TableCell>
                             </TableRow>
                           );
@@ -364,90 +524,17 @@ export default function IssueStock() {
               )}
               <div className="space-y-2">
                 <Label htmlFor="purpose">Purpose</Label>
-                <Textarea id="purpose" placeholder="State the purpose for the requisition..." disabled={issueType === "ria"} />
+                <Textarea id="purpose" placeholder="State the purpose for the requisition..." value={purposeInput} onChange={(e) => setPurposeInput(e.target.value)} disabled={issueType === "ria"} />
               </div>
             </div>
             <DialogFooter>
               <Button variant="outline">Save as Draft</Button>
               {issueType === "normal" ? (
-                <Button
-                  onClick={() => {
-                    if (!selectedReq) return;
-                    const hasQty = Object.values(issuedQuantities).some((q) => q > 0);
-                    if (!hasQty) {
-                      toast.error("Enter quantities to issue");
-                      return;
-                    }
-                    // Validate against balances
-                    const invalid = selectedReq.items.some((it) => {
-                      const approved = it.quantityApproved ?? it.quantityRequested;
-                      const issued = it.quantityIssued ?? 0;
-                      const balance = Math.max(approved - issued, 0);
-                      const val = issuedQuantities[it.id] ?? 0;
-                      return val > balance;
-                    });
-                    if (invalid) {
-                      toast.error("One or more quantities exceed balance");
-                      return;
-                    }
-                    // Prepare API DTO
-                    const newS13Record: Omit<S13Record, "id"> = {
-                      date: new Date().toISOString().split('T')[0],
-                      department: selectedReq.requestingDepartment,
-                      requestedBy: selectedReq.requestedBy,
-                      items: Object.keys(issuedQuantities).length,
-                      status: "Issued",
-                    };
-
-                    issueItems(selectedReq.id, user?.name || "Storekeeper", issuedQuantities);
-                    logStoresAction("UPDATE", `Issued items for ${selectedReq.s12Number} via S13`);
-                    createS13Mutation.mutate(newS13Record);
-                  }}
-                  disabled={!selectedReq}
-                >
+                <Button onClick={handleIssueNormal} disabled={!selectedReq}>
                   Issue Items
                 </Button>
               ) : (
-                <Button
-                  onClick={() => {
-                    if (!selectedRIA) return;
-                    const ria = activeRIAs.find(r => r.id === selectedRIA)!;
-                    const hasQty = Object.values(riaIssued).some((q) => q > 0);
-                    if (!hasQty) {
-                      toast.error("Enter quantities to issue");
-                      return;
-                    }
-                    // Validate
-                    const invalid = ria.items.some((it) => {
-                      const available = it.approvedQty - it.usedQty;
-                      const val = riaIssued[it.itemCode] ?? 0;
-                      return val > available;
-                    });
-                    if (invalid) {
-                      toast.error("One or more quantities exceed available");
-                      return;
-                    }
-                    ria.items.forEach((it) => {
-                      const val = riaIssued[it.itemCode] ?? 0;
-                      if (val > 0) {
-                        addUsage(ria.number, it.itemCode, val);
-                      }
-                    });
-
-                    // Create S13 record via API
-                    const newS13Record: Omit<S13Record, "id"> = {
-                      date: new Date().toISOString().split('T')[0],
-                      department: ria.department,
-                      requestedBy: user?.name || "Staff",
-                      items: Object.keys(riaIssued).length,
-                      status: "Issued",
-                    };
-
-                    logStoresAction("UPDATE", `Issued items from ${ria.number} via S13`);
-                    createS13Mutation.mutate(newS13Record);
-                  }}
-                  disabled={!selectedRIA}
-                >
+                <Button onClick={handleIssueRIA} disabled={!selectedRIA}>
                   Issue Items
                 </Button>
               )}
@@ -465,7 +552,7 @@ export default function IssueStock() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">This Month</p>
-                <p className="text-2xl font-bold text-foreground">45</p>
+                <p className="text-2xl font-bold text-foreground">{s13Stats?.thisMonth ?? '—'}</p>
               </div>
             </div>
           </CardContent>
@@ -478,7 +565,7 @@ export default function IssueStock() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Pending</p>
-                <p className="text-2xl font-bold text-foreground">8</p>
+                <p className="text-2xl font-bold text-foreground">{s13Stats?.pending ?? '—'}</p>
               </div>
             </div>
           </CardContent>
@@ -491,7 +578,7 @@ export default function IssueStock() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Departments</p>
-                <p className="text-2xl font-bold text-foreground">12</p>
+                <p className="text-2xl font-bold text-foreground">{s13Stats?.departments ?? '—'}</p>
               </div>
             </div>
           </CardContent>
@@ -504,7 +591,7 @@ export default function IssueStock() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Items Issued</p>
-                <p className="text-2xl font-bold text-foreground">234</p>
+                <p className="text-2xl font-bold text-foreground">{s13Stats?.itemsIssued ?? '—'}</p>
               </div>
             </div>
           </CardContent>
@@ -541,7 +628,16 @@ export default function IssueStock() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {records.map((record) => (
+                {records.filter(r => {
+                  if (!searchTerm) return true;
+                  const q = searchTerm.toLowerCase();
+                  return (
+                    String(r.id).toLowerCase().includes(q) ||
+                    String(r.department || '').toLowerCase().includes(q) ||
+                    String(r.requestedBy || '').toLowerCase().includes(q) ||
+                    String(r.status || '').toLowerCase().includes(q)
+                  );
+                }).map((record) => (
                   <TableRow key={record.id}>
                     <TableCell className="font-mono text-sm font-medium">{record.id}</TableCell>
                     <TableCell>{record.date}</TableCell>
@@ -551,7 +647,7 @@ export default function IssueStock() {
                     <TableCell>{getStatusBadge(record.status)}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleViewS13(record.id)}>
                           <Eye className="h-4 w-4" />
                         </Button>
                         <Button
@@ -571,6 +667,63 @@ export default function IssueStock() {
           </div>
         </CardContent>
       </Card>
+
+      {/* View S13 Dialog */}
+      <Dialog open={viewDialogOpen} onOpenChange={setViewDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>S13 Details</DialogTitle>
+            <DialogDescription>Read-only view of the selected S13</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            {selectedRecord ? (
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>S13 Number</Label>
+                    <Input value={selectedRecord.id} readOnly className="bg-muted" />
+                  </div>
+                  <div>
+                    <Label>Date</Label>
+                    <Input value={selectedRecord.date} readOnly className="bg-muted" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>Department</Label>
+                    <Input value={selectedRecord.department} readOnly className="bg-muted" />
+                  </div>
+                  <div>
+                    <Label>Requested By</Label>
+                    <Input value={selectedRecord.requestedBy} readOnly className="bg-muted" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <Label>Items</Label>
+                    <Input value={String(selectedRecord.items)} readOnly className="bg-muted" />
+                  </div>
+                  <div>
+                    <Label>Status</Label>
+                    <Input value={selectedRecord.status} readOnly className="bg-muted" />
+                  </div>
+                  <div>
+                    <Label>Issued At</Label>
+                    <Input value={selectedRecord.date} readOnly className="bg-muted" />
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div>No record selected</div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setViewDialogOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Print Dialog */}
       <PrintDialog

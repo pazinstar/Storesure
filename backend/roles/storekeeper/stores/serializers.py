@@ -113,11 +113,66 @@ class IssueHistorySerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ['id']
 
+    def create(self, validated_data):
+        # Ensure we persist exactly what the client provided for IssueHistory
+        # (avoid any accidental mapping issues). Log incoming payload for debugging.
+        try:
+            import logging
+            logging.getLogger('django.request').debug(f"Creating IssueHistory with: {validated_data}")
+        except Exception:
+            pass
+        return IssueHistory.objects.create(**validated_data)
+
 class ReceivingHistorySerializer(serializers.ModelSerializer):
+    # Expose both `amount` (legacy string) and `totalValue` (numeric) and signaturePlacement
+    lpoReference = serializers.CharField(write_only=True, required=False, allow_null=True)
+    signatureConfirmed = serializers.BooleanField(write_only=True, required=False)
+    totalValue = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    signaturePlacement = serializers.JSONField(required=False, allow_null=True)
+
     class Meta:
         model = ReceivingHistory
         fields = '__all__'
         read_only_fields = ['id']
+
+    def create(self, validated_data):
+        # Pull out write-only fields
+        lpo_ref = validated_data.pop('lpoReference', None)
+        # Remove write-only helper fields so they are not passed to model create
+        sig_confirmed = validated_data.pop('signatureConfirmed', False)
+
+        # If an LPO reference was provided, load PurchaseOrder to populate items and totalValue
+        if lpo_ref:
+            from .models import PurchaseOrder
+            try:
+                po = PurchaseOrder.objects.prefetch_related('items').get(lpoNumber=lpo_ref)
+                # Sum quantities from LPO items for items count
+                items_count = sum(int(i.quantity or 0) for i in po.items.all())
+                validated_data['items'] = items_count
+                # Use numeric totalValue from PurchaseOrder if present
+                validated_data['totalValue'] = po.totalValue or validated_data.get('totalValue')
+            except PurchaseOrder.DoesNotExist:
+                # ignore, frontend may provide explicit values
+                pass
+
+        # If signature was confirmed at creation, set signer info from request user if available
+        request = self.context.get('request') if self.context else None
+        if sig_confirmed and request and getattr(request, 'user', None) and not request.user.is_anonymous:
+            try:
+                name = f"{request.user.get_full_name() or getattr(request.user, 'username', '')}"
+            except Exception:
+                name = str(request.user)
+            validated_data['storekeeperSignature'] = name
+            # store user id/identifier for reference
+            try:
+                user_id = getattr(request.user, 'id', None) or getattr(request.user, 'pk', None) or str(request.user)
+            except Exception:
+                user_id = str(request.user)
+            validated_data['storekeeperId'] = str(user_id)
+            from django.utils import timezone
+            validated_data['signedAt'] = timezone.now().isoformat()
+
+        return super().create(validated_data)
 
 from .models import (
     Supplier,
@@ -135,6 +190,13 @@ class SupplierSerializer(serializers.ModelSerializer):
     class Meta:
         model = Supplier
         fields = '__all__'
+        extra_kwargs = {
+            'email': {'required': False, 'allow_blank': True},
+            'phone': {'required': False, 'allow_blank': True},
+            'taxPin': {'required': False, 'allow_blank': True},
+            'category': {'required': False},
+            'status': {'required': False},
+        }
 
 class PurchaseOrderItemSerializer(serializers.ModelSerializer):
     class Meta:
@@ -251,13 +313,16 @@ class StockBalanceSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'category', 'unit', 'opening', 'received', 'issued', 'closing', 'value']
 
     def get_category(self, obj):
+        # Prefer explicit FK relation when available
         try:
-            return obj.item.category
+            if getattr(obj, 'item', None):
+                return obj.item.category
         except Exception:
-            # Fallback if there's no reverse relationship mapped cleanly or item is missing
-            from .models import InventoryItem
-            item = InventoryItem.objects.filter(id=obj.itemCode).first()
-            return item.category if item else 'Uncategorized'
+            pass
+        # Fallback to lookup by itemCode string
+        from .models import InventoryItem
+        item = InventoryItem.objects.filter(id=obj.itemCode).first()
+        return item.category if item else 'Uncategorized'
 
 class StoreReportSerializer(serializers.ModelSerializer):
     icon = serializers.CharField(source='iconName', required=False)
@@ -356,11 +421,3 @@ class InventorySettingSerializer(serializers.ModelSerializer):
     class Meta:
         model = InventorySetting
         fields = '__all__'
-
-
-class S2LedgerEntrySerializer(serializers.ModelSerializer):
-    class Meta:
-        from .models import S2LedgerEntry
-        model = S2LedgerEntry
-        fields = '__all__'
-        read_only_fields = ['id', 'createdAt']

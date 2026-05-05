@@ -42,11 +42,10 @@ import {
 } from "@/components/ui/dialog";
 import {
   Search, Plus, ArrowDownToLine, FileText, Eye, Printer,
-  Lock, Send, CheckCircle, Clock, FileCheck, PenLine
+  Lock, Send, CheckCircle, Clock, FileCheck, PenLine, XCircle
 } from "lucide-react";
 import S11PrintTemplate, { S11PrintData } from "@/components/prints/S11PrintTemplate";
 import PrintDialog from "@/components/prints/PrintDialog";
-import { LedgerBadge } from "@/components/stores/LedgerBadge";
 
 // Type for selected LPO items in form
 interface SelectedLPOData {
@@ -58,6 +57,11 @@ export default function ReceiveStock() {
   const { data: initialRecords = [] } = useQuery({
     queryKey: ['s11-records'],
     queryFn: () => api.getS11Records()
+  });
+  const { data: s11Stats } = useQuery({
+    queryKey: ['s11-stats'],
+    queryFn: () => api.getS11Stats(),
+    staleTime: 1000 * 60, // 1 minute
   });
   const { data: settings } = useQuery({
     queryKey: ['inventory-settings'],
@@ -87,6 +91,8 @@ export default function ReceiveStock() {
   const [signatureConfirmed, setSignatureConfirmed] = useState(false);
   const [printDialogOpen, setPrintDialogOpen] = useState(false);
   const [printData, setPrintData] = useState<S11PrintData | null>(null);
+  const [viewDialogOpen, setViewDialogOpen] = useState(false);
+  const [selectedRecord, setSelectedRecord] = useState<S11Record | null>(null);
   const [supplierName, setSupplierName] = useState("");
   const [lpoDate, setLpoDate] = useState("");
   const { logStoresAction } = useAuditLog();
@@ -198,8 +204,11 @@ export default function ReceiveStock() {
   const createS11Mutation = useMutation({
     mutationFn: (newRecord: Omit<S11Record, "id">) => api.createS11Record(newRecord),
     onSuccess: (savedRecord) => {
-      setRecords([savedRecord, ...records]);
+      setRecords(prev => [savedRecord, ...prev]);
       queryClient.setQueryData(['s11-records'], (oldData: any) => [savedRecord, ...(oldData || [])]);
+      // Refresh stats and ensure list is fresh
+      queryClient.invalidateQueries(['s11-stats']);
+      queryClient.invalidateQueries(['s11-records']);
       toast.success("GRN Record Created", { description: `Status: ${savedRecord.status}` });
       addNotification({ title: "GRN Created (S11)", message: `${savedRecord.id} received — ${savedRecord.status}`, type: "success", link: "/stores/receive" });
       resetForm();
@@ -212,14 +221,29 @@ export default function ReceiveStock() {
   const updateS11Mutation = useMutation({
     mutationFn: ({ id, updates }: { id: string, updates: Partial<S11Record> }) => api.updateS11Record(id, updates),
     onSuccess: (updatedRecord) => {
-      setRecords(records.map(record => record.id === updatedRecord.id ? updatedRecord : record));
-      queryClient.setQueryData(['s11-records'], (oldData: any) => 
+      setRecords(prev => prev.map(record => record.id === updatedRecord.id ? updatedRecord : record));
+      queryClient.setQueryData(['s11-records'], (oldData: any) =>
         (oldData || []).map((r: S11Record) => r.id === updatedRecord.id ? updatedRecord : r)
       );
+      queryClient.invalidateQueries(['s11-stats']);
       toast.success("Status Updated", { description: `${updatedRecord.id} is now ${updatedRecord.status}` });
     },
     onError: () => {
       toast.error("Failed to update GRN status.");
+    }
+  });
+
+  const deleteS11Mutation = useMutation({
+    mutationFn: (id: string) => api.deleteS11Record(id),
+    onSuccess: (_, id) => {
+      setRecords(prev => prev.filter(r => r.id !== id));
+      queryClient.setQueryData(['s11-records'], (oldData: any) => (oldData || []).filter((r: S11Record) => r.id !== id));
+      queryClient.invalidateQueries(['s11-stats']);
+      queryClient.invalidateQueries(['s11-records']);
+      toast.success("GRN deleted");
+    },
+    onError: () => {
+      toast.error("Failed to delete GRN");
     }
   });
 
@@ -229,7 +253,14 @@ export default function ReceiveStock() {
       sourceType: sourceType,
       supplier: supplierName || (sourceType === "Supplier" ? "External Supplier" : "Internal Store"),
       storeLocation: storeLocation,
+      // include lpo reference so backend can derive items and numeric totalValue
+      lpoReference: lpoReference || null,
+      // legacy field (string) kept for compatibility
       amount: receivedTotal,
+      // also provide numeric total as a hint
+      totalValue: receivedTotal,
+      // indicate if the creator confirmed their digital signature
+      signatureConfirmed: signatureConfirmed,
       status: status,
     };
   };
@@ -287,6 +318,9 @@ export default function ReceiveStock() {
   };
 
   const handleViewS11 = (id: string) => {
+    const rec = records.find(r => r.id === id) || null;
+    setSelectedRecord(rec);
+    setViewDialogOpen(true);
     logStoresAction("S11 Viewed", `Viewed S11 record ${id}`);
   };
 
@@ -407,9 +441,7 @@ export default function ReceiveStock() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-foreground">Receive Stock (GRN)</h1>
-          <p className="text-muted-foreground mt-1">
-            Record items entering store (S11). Postings route by Asset Type — <span className="font-mono">Consumable</span> → S1 ledger; <span className="font-mono">Permanent / Expendable / Fixed Asset</span> → S2 ledger.
-          </p>
+          <p className="text-muted-foreground mt-1">Record items entering store (S11)</p>
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
@@ -595,12 +627,7 @@ export default function ReceiveStock() {
                                     </span>
                                   )}
                                 </TableCell>
-                                <TableCell>
-                                  <div className="flex flex-col gap-1 items-start">
-                                    {getAssetTypeBadge(item.assetType)}
-                                    <LedgerBadge assetType={item.assetType} />
-                                  </div>
-                                </TableCell>
+                                <TableCell>{getAssetTypeBadge(item.assetType)}</TableCell>
                                 <TableCell className="text-right">{item.unitPrice.toLocaleString()}</TableCell>
                                 <TableCell className="text-right font-medium">
                                   {(receivedQty * item.unitPrice).toLocaleString()}
@@ -723,7 +750,7 @@ export default function ReceiveStock() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">This Month</p>
-                <p className="text-2xl font-bold text-foreground">24</p>
+                <p className="text-2xl font-bold text-foreground">{s11Stats?.thisMonth ?? '—'}</p>
               </div>
             </div>
           </CardContent>
@@ -736,7 +763,7 @@ export default function ReceiveStock() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Drafts</p>
-                <p className="text-2xl font-bold text-foreground">1</p>
+                <p className="text-2xl font-bold text-foreground">{s11Stats?.drafts ?? '—'}</p>
               </div>
             </div>
           </CardContent>
@@ -749,7 +776,7 @@ export default function ReceiveStock() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Pending</p>
-                <p className="text-2xl font-bold text-foreground">3</p>
+                <p className="text-2xl font-bold text-foreground">{s11Stats?.pending ?? '—'}</p>
               </div>
             </div>
           </CardContent>
@@ -762,7 +789,7 @@ export default function ReceiveStock() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Posted</p>
-                <p className="text-2xl font-bold text-foreground">18</p>
+                <p className="text-2xl font-bold text-foreground">{s11Stats?.posted ?? '—'}</p>
               </div>
             </div>
           </CardContent>
@@ -775,7 +802,7 @@ export default function ReceiveStock() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Total Value</p>
-                <p className="text-2xl font-bold text-foreground">KES 307K</p>
+                <p className="text-2xl font-bold text-foreground">{s11Stats ? `KES ${Number(s11Stats.totalValue).toLocaleString()}` : '—'}</p>
               </div>
             </div>
           </CardContent>
@@ -814,7 +841,16 @@ export default function ReceiveStock() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {records.map((record) => (
+                {records.filter(r => {
+                  if (!searchTerm) return true;
+                  const q = searchTerm.toLowerCase();
+                  return (
+                    String(r.id).toLowerCase().includes(q) ||
+                    String(r.supplier || '').toLowerCase().includes(q) ||
+                    String(r.storeLocation || '').toLowerCase().includes(q) ||
+                    String(r.status || '').toLowerCase().includes(q)
+                  );
+                }).map((record) => (
                   <TableRow key={record.id}>
                     <TableCell className="font-mono text-sm font-medium">{record.id}</TableCell>
                     <TableCell>{record.date}</TableCell>
@@ -826,7 +862,7 @@ export default function ReceiveStock() {
                     </TableCell>
                     <TableCell>{record.storeLocation}</TableCell>
                     <TableCell className="text-right">{record.items}</TableCell>
-                    <TableCell className="text-right font-semibold">{record.totalValue}</TableCell>
+                    <TableCell className="text-right font-semibold">{(record.totalValue ?? record.amount) as any}</TableCell>
                     <TableCell>
                       {record.storekeeperSignature ? (
                         <div className="space-y-0.5">
@@ -847,6 +883,9 @@ export default function ReceiveStock() {
                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handlePrintS11(record)}>
                           <Printer className="h-4 w-4" />
                         </Button>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => { if (blockAction('delete records')) return; if (confirm(`Delete GRN ${record.id}?`)) deleteS11Mutation.mutate(record.id); }}>
+                              <XCircle className="h-4 w-4" />
+                            </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -865,6 +904,73 @@ export default function ReceiveStock() {
       >
         {printData && <S11PrintTemplate data={printData} />}
       </PrintDialog>
+
+      {/* View GRN Dialog */}
+      <Dialog open={viewDialogOpen} onOpenChange={setViewDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>GRN Details</DialogTitle>
+            <DialogDescription>Read-only view of the selected GRN</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            {selectedRecord ? (
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>GRN Number</Label>
+                    <Input value={selectedRecord.id} readOnly className="bg-muted" />
+                  </div>
+                  <div>
+                    <Label>Date</Label>
+                    <Input value={selectedRecord.date} readOnly className="bg-muted" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>Source</Label>
+                    <Input value={selectedRecord.sourceType} readOnly className="bg-muted" />
+                  </div>
+                  <div>
+                    <Label>Supplier</Label>
+                    <Input value={selectedRecord.supplier} readOnly className="bg-muted" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <Label>Store Location</Label>
+                    <Input value={selectedRecord.storeLocation} readOnly className="bg-muted" />
+                  </div>
+                  <div>
+                    <Label>Items</Label>
+                    <Input value={String(selectedRecord.items)} readOnly className="bg-muted" />
+                  </div>
+                  <div>
+                    <Label>Total Value</Label>
+                    <Input value={String(selectedRecord.totalValue ?? selectedRecord.amount ?? '')} readOnly className="bg-muted" />
+                  </div>
+                </div>
+
+                <div>
+                  <Label>Signed By</Label>
+                  <Input value={selectedRecord.storekeeperSignature || ''} readOnly className="bg-muted" />
+                </div>
+
+                <div>
+                  <Label>Signature Placement</Label>
+                  <Textarea value={JSON.stringify(selectedRecord.signaturePlacement || {})} readOnly rows={3} className="bg-muted" />
+                </div>
+              </div>
+            ) : (
+              <div>No record selected</div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setViewDialogOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

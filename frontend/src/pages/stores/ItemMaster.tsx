@@ -37,7 +37,7 @@ import { toast } from "sonner";
 import { useReadOnlyGuard } from "@/hooks/useReadOnlyGuard";
 
 // Asset classification types
-type AssetType = "Consumable" | "Expendable" | "Permanent" | "Fixed Asset";
+type AssetType = "Consumable" | "Permanent" | "Fixed Asset";
 
 interface Item {
   id: string;
@@ -195,6 +195,21 @@ export default function ItemMaster() {
     }
   });
 
+  const updateItemMutation = useMutation({
+    mutationFn: ({ id, updates }: { id: string; updates: Partial<Item> }) => api.updateItem(id, updates),
+    onSuccess: (updatedItem) => {
+      setItems(items.map((it) => (it.id === updatedItem.id ? updatedItem : it)));
+      queryClient.setQueryData(['inventory-items'], (oldData: any) => {
+        if (!oldData) return [updatedItem];
+        return (oldData as Item[]).map((it) => (it.id === updatedItem.id ? updatedItem : it));
+      });
+      toast.success("Item updated successfully");
+    },
+    onError: () => {
+      toast.error("Failed to update item. Check connection.");
+    }
+  });
+
   const handleAdd = () => {
     const openingBalance = parseInt(formData.openingBalance) || 0;
     const reorderLevel = parseInt(formData.reorderLevel) || 0;
@@ -259,31 +274,32 @@ export default function ItemMaster() {
     const reorderLevel = parseInt(formData.reorderLevel) || 0;
     const minimumStockLevel = parseInt(formData.minimumStockLevel) || 0;
 
-    setItems(items.map(item =>
-      item.id === selectedItem.id
-        ? {
-          ...item,
-          name: formData.name,
-          category: formData.category,
-          assetType: formData.assetType as AssetType,
-          unit: formData.unit,
-          minimumStockLevel: minimumStockLevel,
-          reorderLevel: reorderLevel,
-          openingBalance: selectedItem.hasBeenUsed ? item.openingBalance : openingBalance,
-          expiryDate: formData.expiryDate || undefined,
-          status: calculateStatus(selectedItem.hasBeenUsed ? item.openingBalance : openingBalance, reorderLevel),
-          description: formData.description,
-          location: formData.location,
-        }
-        : item
-    ));
+    const updatedPayload: Partial<Item> = {
+      name: formData.name,
+      category: formData.category,
+      assetType: formData.assetType as AssetType,
+      unit: formData.unit,
+      minimumStockLevel: minimumStockLevel,
+      reorderLevel: reorderLevel,
+      openingBalance: selectedItem.hasBeenUsed ? selectedItem.openingBalance : openingBalance,
+      expiryDate: formData.expiryDate || undefined,
+      status: calculateStatus(selectedItem.hasBeenUsed ? selectedItem.openingBalance : openingBalance, reorderLevel),
+      description: formData.description,
+      location: formData.location,
+    };
 
-    toast.success("Item updated successfully");
-    setIsEditOpen(false);
-    setShowConfirmDialog(false);
-    setPendingAction(null);
-    setSelectedItem(null);
-    resetForm();
+    // Optimistic UI update
+    setItems(items.map(item => item.id === selectedItem.id ? { ...item, ...(updatedPayload as Item) } : item));
+
+    updateItemMutation.mutate({ id: selectedItem.id, updates: updatedPayload }, {
+      onSettled: () => {
+        setIsEditOpen(false);
+        setShowConfirmDialog(false);
+        setPendingAction(null);
+        setSelectedItem(null);
+        resetForm();
+      }
+    });
   };
 
   const openViewDialog = (item: Item) => {
@@ -292,6 +308,15 @@ export default function ItemMaster() {
   };
 
   const openEditDialog = (item: Item) => {
+    // Infer locationType from stored location when backend only stores `location`
+    const storedLocation = item.location || "";
+    let inferredLocationType = "";
+    if (storedLocation) {
+      if (storeLocations.includes(storedLocation)) inferredLocationType = "Stores";
+      else if (libraryLocations.includes(storedLocation)) inferredLocationType = "Library";
+      else if (departmentLocations.includes(storedLocation)) inferredLocationType = "Department";
+    }
+
     setSelectedItem(item);
     setFormData({
       name: item.name,
@@ -303,8 +328,8 @@ export default function ItemMaster() {
       openingBalance: String(item.openingBalance),
       expiryDate: item.expiryDate || "",
       description: item.description || "",
-      locationType: item.locationType || "",
-      location: item.location || "",
+      locationType: item.locationType || inferredLocationType,
+      location: storedLocation,
     });
     setIsEditOpen(true);
   };
