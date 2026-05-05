@@ -1,0 +1,336 @@
+﻿python : Traceback 
+(most recent call 
+last):
+At line:1 char:1
++ python manage.py 
+check > error.txt 
+2>&1; Get-Content 
+error.txt
++ ~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~
+    + CategoryInfo     
+         : NotSpecifi  
+  ed: (Traceback (mo   
+ st recent call las    
+t)::String) [], Re    
+moteException
+    + FullyQualifiedEr 
+   rorId : NativeComm  
+  andError
+ 
+  File "C:\Users\ethan\
+AppData\Roaming\Python\
+Python313\site-packages
+\django\core\checks\url
+s.py", line 136, in che
+ck_custom_error_handler
+s
+    handler = resolver.
+resolve_error_handler(s
+tatus_code)
+  File "C:\Users\ethan\
+AppData\Roaming\Python\
+Python313\site-packages
+\django\urls\resolvers.
+py", line 732, in 
+resolve_error_handler
+    callback = getattr(
+self.urlconf_module, 
+"handler%s" % 
+view_type, None)
+                       
+^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ethan\
+AppData\Roaming\Python\
+Python313\site-packages
+\django\utils\functiona
+l.py", line 47, in 
+__get__
+    res = instance.__di
+ct__[self.name] = 
+self.func(instance)
+                       
+                  
+~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\ethan\
+AppData\Roaming\Python\
+Python313\site-packages
+\django\urls\resolvers.
+py", line 711, in 
+urlconf_module
+    return import_modul
+e(self.urlconf_name)
+  File "C:\Apps\Install
+ed\python313\Lib\import
+lib\__init__.py", line 
+88, in import_module
+    return _bootstrap._
+gcd_import(name[level:]
+, package, level)
+           ~~~~~~~~~~~~
+~~~~~~~~~~^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^
+  File "<frozen importl
+ib._bootstrap>", line 
+1387, in _gcd_import
+  File "<frozen importl
+ib._bootstrap>", line 
+1360, in _find_and_load
+  File "<frozen importl
+ib._bootstrap>", line 
+1331, in 
+_find_and_load_unlocked
+  File "<frozen importl
+ib._bootstrap>", line 
+935, in _load_unlocked
+  File "<frozen importl
+ib._bootstrap_external>
+", line 1023, in 
+exec_module
+  File "<frozen importl
+ib._bootstrap>", line 
+488, in _call_with_fram
+es_removed
+  File "D:\Development\
+Active\OpenSource\Contr
+ibutions\store-sure\sto
+resure_backend\urls.py"
+, line 16, in <module>
+    from roles.storekee
+per.stores.views 
+import 
+DeliveriesListView
+  File "D:\Development\
+Active\OpenSource\Contr
+ibutions\store-sure\rol
+es\storekeeper\stores\v
+iews.py", line 9, in 
+<module>
+    from .serializers 
+import (
+    ...<5 lines>...
+    )
+  File "D:\Development\
+Active\OpenSource\Contr
+ibutions\store-sure\rol
+es\storekeeper\stores\s
+erializers.py", line 
+353, in <module>
+    from .models 
+import InventorySetting
+ImportError: cannot 
+import name 
+'InventorySetting' 
+from 'roles.storekeeper
+.stores.models' (D:\Dev
+elopment\Active\OpenSou
+rce\Contributions\store
+-sure\roles\storekeeper
+\stores\models.py)
+
+During handling of the 
+above exception, 
+another exception 
+occurred:
+
+Traceback (most recent 
+call last):
+  File "D:\Development\
+Active\OpenSource\Contr
+ibutions\store-sure\man
+age.py", line 22, in 
+<module>
+    main()
+    ~~~~^^
+  File "D:\Development\
+Active\OpenSource\Contr
+ibutions\store-sure\man
+age.py", line 18, in 
+main
+    execute_from_comman
+d_line(sys.argv)
+    ~~~~~~~~~~~~~~~~~~~
+~~~~~~^^^^^^^^^^
+  File "C:\Users\ethan\
+AppData\Roaming\Python\
+Python313\site-packages
+\django\core\management
+\__init__.py", line 
+442, in execute_from_co
+mmand_line
+    utility.execute()
+    ~~~~~~~~~~~~~~~^^
+  File "C:\Users\ethan\
+AppData\Roaming\Python\
+Python313\site-packages
+\django\core\management
+\__init__.py", line 
+436, in execute
+    self.fetch_command(
+subcommand).run_from_ar
+gv(self.argv)
+    ~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~
+~~^^^^^^^^^^^
+  File "C:\Users\ethan\
+AppData\Roaming\Python\
+Python313\site-packages
+\django\core\management
+\base.py", line 420, 
+in run_from_argv
+    
+self.execute(*args, 
+**cmd_options)
+    ~~~~~~~~~~~~^^^^^^^
+^^^^^^^^^^^^^^^
+  File "C:\Users\ethan\
+AppData\Roaming\Python\
+Python313\site-packages
+\django\core\management
+\base.py", line 464, 
+in execute
+    output = 
+self.handle(*args, 
+**options)
+  File "C:\Users\ethan\
+AppData\Roaming\Python\
+Python313\site-packages
+\django\core\management
+\commands\check.py", 
+line 81, in handle
+    self.check(
+    ~~~~~~~~~~^
+        app_configs=app
+_configs,
+        ^^^^^^^^^^^^^^^
+^^^^^^^^^
+    ...<4 lines>...
+        databases=optio
+ns["databases"],
+        ^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\ethan\
+AppData\Roaming\Python\
+Python313\site-packages
+\django\core\management
+\base.py", line 496, 
+in check
+    all_issues = 
+checks.run_checks(
+        app_configs=app
+_configs,
+    ...<2 lines>...
+        
+databases=databases,
+    )
+  File "C:\Users\ethan\
+AppData\Roaming\Python\
+Python313\site-packages
+\django\core\checks\reg
+istry.py", line 89, in 
+run_checks
+    new_errors = check(
+app_configs=app_configs
+, databases=databases)
+  File "C:\Users\ethan\
+AppData\Roaming\Python\
+Python313\site-packages
+\django\core\checks\url
+s.py", line 138, in che
+ck_custom_error_handler
+s
+    path = getattr(reso
+lver.urlconf_module, 
+"handler%s" % 
+status_code)
+                   
+^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ethan\
+AppData\Roaming\Python\
+Python313\site-packages
+\django\utils\functiona
+l.py", line 47, in 
+__get__
+    res = instance.__di
+ct__[self.name] = 
+self.func(instance)
+                       
+                  
+~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\ethan\
+AppData\Roaming\Python\
+Python313\site-packages
+\django\urls\resolvers.
+py", line 711, in 
+urlconf_module
+    return import_modul
+e(self.urlconf_name)
+  File "C:\Apps\Install
+ed\python313\Lib\import
+lib\__init__.py", line 
+88, in import_module
+    return _bootstrap._
+gcd_import(name[level:]
+, package, level)
+           ~~~~~~~~~~~~
+~~~~~~~~~~^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^
+  File "<frozen importl
+ib._bootstrap>", line 
+1387, in _gcd_import
+  File "<frozen importl
+ib._bootstrap>", line 
+1360, in _find_and_load
+  File "<frozen importl
+ib._bootstrap>", line 
+1331, in 
+_find_and_load_unlocked
+  File "<frozen importl
+ib._bootstrap>", line 
+935, in _load_unlocked
+  File "<frozen importl
+ib._bootstrap_external>
+", line 1023, in 
+exec_module
+  File "<frozen importl
+ib._bootstrap>", line 
+488, in _call_with_fram
+es_removed
+  File "D:\Development\
+Active\OpenSource\Contr
+ibutions\store-sure\sto
+resure_backend\urls.py"
+, line 16, in <module>
+    from roles.storekee
+per.stores.views 
+import 
+DeliveriesListView
+  File "D:\Development\
+Active\OpenSource\Contr
+ibutions\store-sure\rol
+es\storekeeper\stores\v
+iews.py", line 9, in 
+<module>
+    from .serializers 
+import (
+    ...<5 lines>...
+    )
+  File "D:\Development\
+Active\OpenSource\Contr
+ibutions\store-sure\rol
+es\storekeeper\stores\s
+erializers.py", line 
+353, in <module>
+    from .models 
+import InventorySetting
+ImportError: cannot 
+import name 
+'InventorySetting' 
+from 'roles.storekeeper
+.stores.models' (D:\Dev
+elopment\Active\OpenSou
+rce\Contributions\store
+-sure\roles\storekeeper
+\stores\models.py)
