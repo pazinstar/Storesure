@@ -1,105 +1,105 @@
-# =========================
-
-# OS / Editor
-
-# =========================
-
+# ─── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# ─── Editor / IDE ──────────────────────────────────────────────────────────────
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+
+# ─── Claude Code ───────────────────────────────────────────────────────────────
 .claude/
 
-# =========================
-
-# ENV files (IMPORTANT)
-
-# =========================
-
-.env
-.env.*
-!.env.example
-
-# =========================
-
-# PYTHON / DJANGO BACKEND
-
-# =========================
-
-**pycache**/
-*.py[cod]
-*.pyo
-*.pyd
-
-# Virtual environments
-
-venv/
-env/
-.venv/
-
-# Django stuff
-
+# ─── Logs / scratch ────────────────────────────────────────────────────────────
 *.log
-db.sqlite3
-db.sqlite3-journal
-media/
-
-# Static files (if collected)
-
-staticfiles/
-
-# Migrations (optional – be careful if team project)
-
-# */migrations/*
-
-# !*/migrations/**init**.py
-
-# =========================
-
-# NODE / REACT (VITE FRONTEND)
-
-# =========================
-
-node_modules/
-dist/
-build/
-
-# Vite specific
-
-.vite/
-
-# Logs
-
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# =========================
+# Dev throwaway artefacts
+out.txt
+out2.txt
+error.txt
+error_utf8.txt
+check_err.txt
+ledger_response.json
+temp_*.json
+temp_*.ts
+utf8_*.json
 
-# TEST / COVERAGE
+# Vite HMR temp config
+vite.config.*.timestamp-*.mjs
 
-# =========================
+# Standalone test scripts at frontend root (not the proper test suite under src/)
+/frontend/test.js
+/frontend/test.py
 
-.coverage
-coverage/
-htmlcov/
+# ─── Secrets / env ─────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
 
-# =========================
+# ─── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
 
-# CACHE
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
 
-# =========================
+# Packaging
+*.egg-info/
+*.egg
 
-.cache/
+# Testing & coverage
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
 
-# =========================
+# Type checkers / linters
+.mypy_cache/
+.ruff_cache/
+.pyright/
 
-# MISC
+# Django
+db.sqlite3
+db.sqlite3-journal
+media/
+staticfiles/
 
-# =========================
+# ─── Node / JS ─────────────────────────────────────────────────────────────────
+node_modules/
+.pnpm-store/
+.npm/
+.yarn/
+.cache/
 
-*.swp
-*.swo
-*~
+# This repo uses npm — keep package-lock.json, ignore other lockfiles
+bun.lockb
+yarn.lock
+pnpm-lock.yaml
+
+# Build output (Vite / generic)
+dist/
+build/
+.vite/
+.next/
+
+# TS incremental
+*.tsbuildinfo
+
+# ─── Misc ──────────────────────────────────────────────────────────────────────
+*.pid
+*.seed
