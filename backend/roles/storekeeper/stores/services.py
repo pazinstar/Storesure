@@ -10,6 +10,7 @@ from .models import (
     S2Transaction, S2Ledger, InventoryItem, ItemTypeChoices,
     TRANSACTION_TYPE_CHOICES, ENTRY_STATUS_CHOICES,
 )
+from .capitalization_engine import classify_item, log_classification_prompt
 
 
 def get_or_create_s2_ledger(item: InventoryItem) -> tuple:
@@ -112,6 +113,23 @@ def post_s2_receipt(*, item: InventoryItem, date, qty: int,
         # Sync InventoryItem openingBalance
         item.openingBalance = running_after
         item.save(update_fields=['openingBalance'])
+
+        # Run capitalization classification and log a prompt (auto-suggestion).
+        try:
+            classification = classify_item(item, qty=qty, unit_cost=unit_cost, created_by=created_by)
+            log_classification_prompt(
+                item=item,
+                qty=qty,
+                unit_cost=unit_cost,
+                total_value=total_value,
+                classification=classification,
+                transaction=txn,
+                created_by=created_by,
+            )
+        except Exception:
+            # Classification failure should not block receipt posting; log and continue.
+            import logging
+            logging.getLogger('storesure.cap').exception('Failed to classify item on receipt: %s', item.id)
 
         return txn
 

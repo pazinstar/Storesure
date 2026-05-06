@@ -1,4 +1,5 @@
 from rest_framework import generics
+from decimal import Decimal
 from .models import (
     InventoryItem, 
     Delivery, 
@@ -21,6 +22,25 @@ from django.utils import timezone
 class InventoryListView(generics.ListCreateAPIView):
     queryset = InventoryItem.objects.all().order_by('-createdAt', '-id')
     serializer_class = InventoryItemSerializer
+
+    def perform_create(self, serializer):
+        # Save item and run auto-classification (non-blocking)
+        item = serializer.save()
+        try:
+            from .capitalization_engine import classify_item, log_classification_prompt
+            created_by = getattr(self.request, 'user', None)
+            username = created_by.username if created_by and not created_by.is_anonymous else ''
+            classification = classify_item(item, qty=1, unit_cost=Decimal('0'), created_by=username)
+            log_classification_prompt(
+                item=item,
+                qty=1,
+                unit_cost=Decimal('0'),
+                classification=classification,
+                created_by=username,
+            )
+        except Exception:
+            import logging
+            logging.getLogger('storesure.cap').exception('Failed to auto-classify item on create: %s', getattr(item, 'id', 'n/a'))
 
 
 class InventoryDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -1379,6 +1399,9 @@ class FixedAssetDisposalView(APIView):
                 # Partial disposal: split the asset
                 calc = asset.calculate_nbv_after_partial_disposal(disposed_qty)
 
+                # capture previous status for history
+                prev_status = asset.status
+
                 # Create child asset for the remaining portion
                 child_asset = FixedAsset.objects.create(
                     name=asset.name,
@@ -1428,13 +1451,22 @@ class FixedAssetDisposalView(APIView):
                 asset.status = 'disposed'
                 asset.save()
 
-                # Log status change
+                # Log status change for original (from previous status → disposed)
                 AssetStatusHistory.objects.create(
                     asset=asset,
-                    from_status=asset.status,
+                    from_status=prev_status,
                     to_status='disposed',
                     changed_by=changed_by,
                     reason=f"Partial disposal: {disposed_qty} units. {disposal_reason}",
+                )
+
+                # Log creation/history for remaining child asset
+                AssetStatusHistory.objects.create(
+                    asset=child_asset,
+                    from_status='',
+                    to_status=child_asset.status,
+                    changed_by=child_asset.created_by or '',
+                    reason=f"Created as remaining portion after partial disposal of {disposed_qty} units.",
                 )
 
                 return Response({
