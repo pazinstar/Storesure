@@ -10,9 +10,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useState } from "react";
 import { Save, X } from "lucide-react";
 
+const ITEM_TYPE_OPTIONS = [
+  { value: "consumable", label: "Consumable" },
+  { value: "expendable", label: "Expendable" },
+  { value: "permanent", label: "Permanent" },
+  { value: "fixed_asset", label: "Fixed Asset" },
+];
+
 export default function AddItem() {
+  const [categoryType, setCategoryType] = useState("consumable");
+
   return (
     <div className="flex-1 space-y-6 p-8">
       <div>
@@ -51,19 +61,46 @@ export default function AddItem() {
 
             <div className="grid gap-6 md:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="quantity">Quantity *</Label>
-                <Input id="quantity" type="number" placeholder="0" />
+                <Label htmlFor="categoryType">Item Type *</Label>
+                <Select value={categoryType} onValueChange={setCategoryType}>
+                  <SelectTrigger id="categoryType">
+                    <SelectValue placeholder="Select item type" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-popover">
+                    {ITEM_TYPE_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="location">Location *</Label>
-                <Input id="location" placeholder="e.g., Room 201" />
+                <Label htmlFor="quantity">Quantity *</Label>
+                <Input id="quantity" type="number" placeholder="0" />
               </div>
             </div>
 
             <div className="grid gap-6 md:grid-cols-2">
               <div className="space-y-2">
+                <Label htmlFor="location">Location *</Label>
+                <Input id="location" placeholder="e.g., Room 201" />
+              </div>
+              <div className="space-y-2">
                 <Label htmlFor="supplier">Supplier</Label>
                 <Input id="supplier" placeholder="Supplier name" />
+              </div>
+            </div>
+
+            <div className="grid gap-6 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="usefulLife">Useful Life (months)</Label>
+                <Input
+                  id="usefulLife"
+                  type="number"
+                  placeholder="0"
+                  disabled={categoryType === "consumable" || categoryType === "expendable"}
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="price">Unit Price</Label>

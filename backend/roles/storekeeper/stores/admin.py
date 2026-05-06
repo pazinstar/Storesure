@@ -9,6 +9,7 @@ from .models import (
     FileMovement, RetentionRecord, AppraisalWorkflow, DisposalRecord,
     InventorySetting, PurchaseRequisition, Tender, Quotation,
     ProcurementReference, ProcurementContract, ContractMilestone,
+    S2Ledger, FixedAsset, CapitalizationRule, LsoRecord,
 )
 
 
@@ -44,8 +45,8 @@ class ContractMilestoneInline(admin.TabularInline):
 
 @admin.register(InventoryItem)
 class InventoryItemAdmin(admin.ModelAdmin):
-    list_display = ['id', 'name', 'category', 'unit', 'status', 'location']
-    list_filter = ['category', 'status']
+    list_display = ['id', 'name', 'category', 'category_type', 'unit', 'status', 'location']
+    list_filter = ['category', 'category_type', 'status']
     search_fields = ['id', 'name', 'category']
     readonly_fields = ['id']
 
@@ -185,3 +186,29 @@ class ProcurementReferenceAdmin(admin.ModelAdmin):
     list_display = ['id']
     search_fields = ['id']
     readonly_fields = ['id']
+
+
+@admin.register(S2Ledger)
+class S2LedgerAdmin(admin.ModelAdmin):
+    list_display = ['id', 'itemCode', 'itemName', 'closingBalance']
+    search_fields = ['itemCode', 'itemName']
+
+
+@admin.register(FixedAsset)
+class FixedAssetAdmin(admin.ModelAdmin):
+    list_display = ['id', 'assetCode', 'name', 'status', 'location']
+    list_filter = ['status']
+    search_fields = ['assetCode', 'name']
+
+
+@admin.register(CapitalizationRule)
+class CapitalizationRuleAdmin(admin.ModelAdmin):
+    list_display = ['id', 'categoryType', 'minCost', 'minUsefulLifeMonths', 'isActive']
+    list_filter = ['isActive', 'categoryType']
+
+
+@admin.register(LsoRecord)
+class LsoRecordAdmin(admin.ModelAdmin):
+    list_display = ['id', 'lsoNumber', 'orderType', 'status', 'totalValue']
+    list_filter = ['orderType', 'status']
+    search_fields = ['lsoNumber', 'supplierName']

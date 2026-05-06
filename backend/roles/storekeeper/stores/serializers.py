@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework.exceptions import ValidationError
 from .models import (
     InventoryItem, 
     Delivery, 
@@ -7,11 +8,22 @@ from .models import (
     IssueHistory, 
     ReceivingHistory
 )
+from .models import ItemTypeChoices
+
+VALID_ITEM_TYPES = {choice.value for choice in ItemTypeChoices}
 
 class InventoryItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = InventoryItem
         fields = '__all__'
+
+    def validate_category_type(self, value):
+        """Enforce only the 4 allowed item types and reject custom/unknown values."""
+        if value not in VALID_ITEM_TYPES:
+            raise ValidationError(
+                f"Invalid item type '{value}'. Must be one of: {', '.join(sorted(VALID_ITEM_TYPES))}."
+            )
+        return value
 
 class StoreItemSerializer(serializers.ModelSerializer):
     code = serializers.CharField(source='id')

@@ -20,17 +20,31 @@ import {
 } from "@/components/ui/table";
 import { Search, Filter, Plus, Edit, Trash2 } from "lucide-react";
 
+const ITEM_TYPE_COLORS: Record<string, string> = {
+  consumable: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+  expendable: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200",
+  permanent: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
+  fixed_asset: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
+};
+
+const ITEM_TYPE_LABELS: Record<string, string> = {
+  consumable: "Consumable",
+  expendable: "Expendable",
+  permanent: "Permanent",
+  fixed_asset: "Fixed Asset",
+};
+
 const inventoryData = [
-  { id: 1, name: "Algebra Textbook", category: "Books", quantity: 145, location: "Room 201", status: "Available", lastUpdated: "2024-01-15" },
-  { id: 2, name: "Dell Laptop", category: "Technology", quantity: 23, location: "Tech Lab", status: "Available", lastUpdated: "2024-01-14" },
-  { id: 3, name: "Scientific Calculator", category: "Technology", quantity: 5, location: "Math Dept", status: "Low Stock", lastUpdated: "2024-01-13" },
-  { id: 4, name: "Chemistry Lab Kit", category: "Equipment", quantity: 32, location: "Lab 3", status: "Available", lastUpdated: "2024-01-12" },
-  { id: 5, name: "Basketball", category: "Equipment", quantity: 18, location: "Gym Storage", status: "Available", lastUpdated: "2024-01-11" },
-  { id: 6, name: "Office Chair", category: "Furniture", quantity: 67, location: "Storage A", status: "Available", lastUpdated: "2024-01-10" },
-  { id: 7, name: "Biology Textbook", category: "Books", quantity: 8, location: "Room 305", status: "Low Stock", lastUpdated: "2024-01-09" },
-  { id: 8, name: "iPad Pro", category: "Technology", quantity: 15, location: "Tech Lab", status: "Available", lastUpdated: "2024-01-08" },
-  { id: 9, name: "Lab Goggles", category: "Equipment", quantity: 3, location: "Lab 1", status: "Critical", lastUpdated: "2024-01-07" },
-  { id: 10, name: "Student Desk", category: "Furniture", quantity: 89, location: "Storage B", status: "Available", lastUpdated: "2024-01-06" },
+  { id: 1, name: "Algebra Textbook", category: "Books", category_type: "expendable", quantity: 145, location: "Room 201", status: "Available", lastUpdated: "2024-01-15" },
+  { id: 2, name: "Dell Laptop", category: "Technology", category_type: "fixed_asset", quantity: 23, location: "Tech Lab", status: "Available", lastUpdated: "2024-01-14" },
+  { id: 3, name: "Scientific Calculator", category: "Technology", category_type: "permanent", quantity: 5, location: "Math Dept", status: "Low Stock", lastUpdated: "2024-01-13" },
+  { id: 4, name: "Chemistry Lab Kit", category: "Equipment", category_type: "consumable", quantity: 32, location: "Lab 3", status: "Available", lastUpdated: "2024-01-12" },
+  { id: 5, name: "Basketball", category: "Equipment", category_type: "consumable", quantity: 18, location: "Gym Storage", status: "Available", lastUpdated: "2024-01-11" },
+  { id: 6, name: "Office Chair", category: "Furniture", category_type: "fixed_asset", quantity: 67, location: "Storage A", status: "Available", lastUpdated: "2024-01-10" },
+  { id: 7, name: "Biology Textbook", category: "Books", category_type: "expendable", quantity: 8, location: "Room 305", status: "Low Stock", lastUpdated: "2024-01-09" },
+  { id: 8, name: "iPad Pro", category: "Technology", category_type: "fixed_asset", quantity: 15, location: "Tech Lab", status: "Available", lastUpdated: "2024-01-08" },
+  { id: 9, name: "Lab Goggles", category: "Equipment", category_type: "permanent", quantity: 3, location: "Lab 1", status: "Critical", lastUpdated: "2024-01-07" },
+  { id: 10, name: "Student Desk", category: "Furniture", category_type: "fixed_asset", quantity: 89, location: "Storage B", status: "Available", lastUpdated: "2024-01-06" },
 ];
 
 export default function Inventory() {
@@ -97,6 +111,7 @@ export default function Inventory() {
           <TableHeader>
             <TableRow>
               <TableHead>Item Name</TableHead>
+              <TableHead>Item Type</TableHead>
               <TableHead>Category</TableHead>
               <TableHead>Quantity</TableHead>
               <TableHead>Location</TableHead>
@@ -109,6 +124,11 @@ export default function Inventory() {
             {inventoryData.map((item) => (
               <TableRow key={item.id}>
                 <TableCell className="font-medium">{item.name}</TableCell>
+                <TableCell>
+                  <Badge className={ITEM_TYPE_COLORS[item.category_type] || "bg-gray-100"}>
+                    {ITEM_TYPE_LABELS[item.category_type] || item.category_type}
+                  </Badge>
+                </TableCell>
                 <TableCell>
                   <Badge variant="outline">{item.category}</Badge>
                 </TableCell>

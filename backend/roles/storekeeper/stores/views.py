@@ -127,6 +127,12 @@ class InventorySettingsView(APIView):
             "libraryLocations": ["Main Library", "Junior Library", "Reference Section", "Archives"],
             "departmentLocations": ["Administration", "Science Department", "Arts Department", "Technical Department", "Sports Department"],
             "assetTypes": ["Consumable", "Permanent", "Fixed Asset"],
+            "itemTypes": [
+                {"value": "consumable", "label": "Consumable"},
+                {"value": "expendable", "label": "Expendable"},
+                {"value": "permanent", "label": "Permanent"},
+                {"value": "fixed_asset", "label": "Fixed Asset"},
+            ],
             "paymentTermsOptions": [
                 { "value": "cod", "label": "Cash on Delivery" },
                 { "value": "net30", "label": "Net 30 Days" },

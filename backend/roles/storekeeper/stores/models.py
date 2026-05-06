@@ -3,14 +3,40 @@ from django.db import models
 from django.utils import timezone
 import uuid
 
+class ItemTypeChoices(models.TextChoices):
+    CONSUMABLE = 'consumable', 'Consumable'
+    EXPENDABLE = 'expendable', 'Expendable'
+    PERMANENT = 'permanent', 'Permanent'
+    FIXED_ASSET = 'fixed_asset', 'Fixed Asset'
+
 class InventoryItem(models.Model):
     id = models.CharField(max_length=50, primary_key=True, blank=True) # ITM001
     name = models.CharField(max_length=255)
     category = models.CharField(max_length=100)
+    category_type = models.CharField(
+        max_length=20,
+        choices=ItemTypeChoices.choices,
+        default=ItemTypeChoices.CONSUMABLE,
+        blank=False,
+        null=False,
+        help_text="Classification type: consumable, expendable, permanent, or fixed_asset"
+    )
     assetType = models.CharField(max_length=100)
     unit = models.CharField(max_length=50)
     minimumStockLevel = models.IntegerField(default=0)
     reorderLevel = models.IntegerField(default=0)
+    min_useful_life = models.IntegerField(
+        default=0,
+        blank=True,
+        null=False,
+        help_text="Minimum useful life in months (for permanent/fixed_asset items)"
+    )
+    default_custodian_required = models.BooleanField(
+        default=False,
+        blank=True,
+        null=False,
+        help_text="Whether a custodian assignment is required for this item"
+    )
     openingBalance = models.IntegerField(default=0)
     hasBeenUsed = models.BooleanField(default=False)
     status = models.CharField(max_length=50)
@@ -899,3 +925,121 @@ class ContractMilestone(models.Model):
 
     def __str__(self):
         return f"{self.contract.contractNumber} - {self.description}"
+
+
+# =============================================================================
+# Phase 1 — Foundation & Data Model: Empty tables (migrations only, no workflows)
+# =============================================================================
+
+class S2Ledger(models.Model):
+    """
+    S2 (Storekeeper) Ledger — Government consumables ledger (S2/S13 alternative).
+    Migrations-only table; workflows implemented in later phases.
+    """
+    id = models.CharField(max_length=50, primary_key=True, blank=True)
+    itemCode = models.CharField(max_length=100, db_index=True)
+    itemName = models.CharField(max_length=255, blank=True, default='')
+    unit = models.CharField(max_length=50, blank=True, default='')
+    openingBalance = models.IntegerField(default=0)
+    receiptsQty = models.IntegerField(default=0)
+    receiptsValue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    issuesQty = models.IntegerField(default=0)
+    issuesValue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    closingBalance = models.IntegerField(default=0)
+    closingValue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    createdAt = models.DateTimeField(auto_now_add=True)
+    updatedAt = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'stores_s2_ledger'
+        verbose_name = 'S2 Ledger'
+        verbose_name_plural = 'S2 Ledgers'
+
+    def __str__(self):
+        return f"{self.itemCode} (S2)"
+
+
+class FixedAsset(models.Model):
+    """
+    Fixed Asset Registry — tracks school fixed assets.
+    Migrations-only table; workflows implemented in later phases.
+    """
+    id = models.CharField(max_length=50, primary_key=True, blank=True)
+    assetCode = models.CharField(max_length=100, unique=True, blank=True)
+    name = models.CharField(max_length=255)
+    category = models.CharField(max_length=100, blank=True, default='')
+    description = models.TextField(blank=True, default='')
+    purchaseDate = models.DateField(null=True, blank=True)
+    purchaseCost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    currentValue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    location = models.CharField(max_length=255, blank=True, default='')
+    custodian = models.CharField(max_length=255, blank=True, default='')
+    usefulLifeMonths = models.IntegerField(default=0)
+    status = models.CharField(max_length=50, default='active')
+    notes = models.TextField(blank=True, default='')
+    createdAt = models.DateTimeField(auto_now_add=True)
+    updatedAt = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'stores_fixed_asset'
+        verbose_name = 'Fixed Asset'
+        verbose_name_plural = 'Fixed Assets'
+
+    def __str__(self):
+        return f"{self.assetCode or self.id} - {self.name}"
+
+
+class CapitalizationRule(models.Model):
+    """
+    Capitalization threshold rules — determines when an item is capitalized.
+    Migrations-only table; workflows implemented in later phases.
+    """
+    id = models.BigAutoField(primary_key=True)
+    categoryType = models.CharField(
+        max_length=20,
+        choices=ItemTypeChoices.choices,
+        default=ItemTypeChoices.FIXED_ASSET,
+        help_text="Item type this rule applies to"
+    )
+    minCost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    minUsefulLifeMonths = models.IntegerField(default=12)
+    description = models.TextField(blank=True, default='')
+    isActive = models.BooleanField(default=True)
+    createdAt = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'stores_capitalization_rule'
+        verbose_name = 'Capitalization Rule'
+        verbose_name_plural = 'Capitalization Rules'
+
+    def __str__(self):
+        return f"{self.get_categoryType_display()} >= {self.minCost} / {self.minUsefulLifeMonths}m"
+
+
+class LsoRecord(models.Model):
+    """
+    Local Service Order (LSO) / Local Purchase Order (LPO) records.
+    Migrations-only table; workflows implemented in later phases.
+    """
+    id = models.CharField(max_length=50, primary_key=True, blank=True)
+    lsoNumber = models.CharField(max_length=100, unique=True, blank=True)
+    orderType = models.CharField(
+        max_length=20,
+        choices=[('lso', 'Local Service Order'), ('lpo', 'Local Purchase Order')],
+        default='lpo'
+    )
+    description = models.TextField(blank=True, default='')
+    supplierName = models.CharField(max_length=255, blank=True, default='')
+    totalValue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    status = models.CharField(max_length=50, default='draft')
+    createdBy = models.CharField(max_length=255, blank=True, default='')
+    createdAt = models.DateTimeField(auto_now_add=True)
+    updatedAt = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'stores_lso_record'
+        verbose_name = 'LSO/LPO Record'
+        verbose_name_plural = 'LSO/LPO Records'
+
+    def __str__(self):
+        return f"{self.lsoNumber or self.id}"
