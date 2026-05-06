@@ -479,6 +479,11 @@ class LedgerReceipt(models.Model):
 
     def save(self, *args, **kwargs):
         self.full_clean()
+        if self.pk is not None:
+            orig = LedgerReceipt.objects.get(pk=self.pk)
+            if orig.date != self.date or orig.unitCost != self.unitCost or orig.qty != self.qty:
+                from django.core.exceptions import ValidationError
+                raise ValidationError("LedgerReceipt entries are immutable after posting. Use reversal workflows.")
         super().save(*args, **kwargs)
 
     def __str__(self):

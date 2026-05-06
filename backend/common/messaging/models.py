@@ -60,3 +60,32 @@ class Message(models.Model):
 
     def __str__(self):
         return f"{self.sender.name} -> {self.recipient.name}: {self.subject}"
+
+
+class AuditLog(models.Model):
+    entity = models.CharField(max_length=100)
+    entity_id = models.CharField(max_length=100)
+    action = models.CharField(max_length=50)  # create|update|delete
+    user_id = models.CharField(max_length=100, blank=True, null=True)
+    old_values = models.JSONField(blank=True, null=True)
+    new_values = models.JSONField(blank=True, null=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-timestamp']
+
+
+class DocumentAttachment(models.Model):
+    entity_type = models.CharField(max_length=100)
+    entity_id = models.CharField(max_length=100)
+    file_path = models.CharField(max_length=1024)
+    doc_type = models.CharField(max_length=100, blank=True, null=True)
+    uploaded_by = models.CharField(max_length=100, blank=True, null=True)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['-uploaded_at']
+
+    def __str__(self):
+        return f"{self.entity_type}:{self.entity_id} - {self.doc_type or 'attachment'}"

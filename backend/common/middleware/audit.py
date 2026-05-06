@@ -41,6 +41,19 @@ class AuditMiddleware:
                     'remote_addr': request.META.get('REMOTE_ADDR'),
                 }
             )
+            from common.messaging.models import AuditLog
+            payload = None
+            try:
+                payload = request.body.decode('utf-8')
+            except Exception:
+                payload = str(request.POST.dict())
+            AuditLog.objects.create(
+                entity=request.path,
+                entity_id=request.resolver_match.kwargs.get('pk') if hasattr(request, 'resolver_match') else '',
+                action=request.method,
+                user_id=getattr(request.user, 'username', 'anonymous') if hasattr(request, 'user') else 'system',
+                new_values=payload,
+            )
 
         response = self.get_response(request)
 
