@@ -4,9 +4,8 @@ from datetime import date, datetime
 from django.conf import settings
 from django.db import transaction
 
-from roles.storekeeper.stores.models import (
-    FixedAsset, DepreciationRun, DepreciationSchedule,
-)
+from roles.storekeeper.stores.models import FixedAsset
+from django.apps import apps
 
 from roles.finance.views import _post_gl
 from roles.finance.models import AccountingPeriod
@@ -33,27 +32,51 @@ def _calc_monthly_depr(asset: FixedAsset) -> Decimal:
 
 
 @transaction.atomic
-def run_depreciation(run_type: str, year: int, month: int = None, created_by: str = '') -> DepreciationRun:
+def run_depreciation(run_type: str, year: int, month: int = None, created_by: str = ''):
     """Run depreciation for a period.
 
     - run_type: 'monthly'|'annual'|'manual'
     - year, month: target period (month required for monthly runs)
     """
-    # Idempotency: ensure no completed run of same period exists
-    existing = DepreciationRun.objects.filter(run_type=run_type, period_year=year, period_month=month, status='completed').first()
-    if existing:
-        raise ValueError('Depreciation for this period already completed. Reverse before re-running.')
+    try:
+        DepreciationRun = apps.get_model('stores', 'DepreciationRun')
+        DepreciationSchedule = apps.get_model('stores', 'DepreciationSchedule')
+    except LookupError:
+        DepreciationRun = None
+        DepreciationSchedule = None
+
+    # Idempotency: if model exists, ensure no completed run of same period exists
+    if DepreciationRun is not None:
+        existing = DepreciationRun.objects.filter(run_type=run_type, period_year=year, period_month=month, status='completed').first()
+        if existing:
+            raise ValueError('Depreciation for this period already completed. Reverse before re-running.')
+    else:
+        # Fallback idempotency: if any GL depreciation entries already exist for this period, prevent re-run
+        try:
+            from roles.finance.models import GLEntry
+            # Broad check: any GL voucher with type 'depreciation' indicates work already posted
+            exists = GLEntry.objects.filter(voucher_type__icontains='depreciation').exists()
+            if exists:
+                raise ValueError('Depreciation for this period already completed (GL postings exist). Reverse before re-running.')
+        except Exception:
+            # If finance app/models not available, skip fallback check
+            pass
 
     run_code = f'DEPR-{year}-{month or 0}-{int(datetime.utcnow().timestamp())}'
-    run = DepreciationRun.objects.create(
-        run_code=run_code,
-        period_year=year,
-        period_month=month,
-        run_type=run_type,
-        status='running',
-        started_at=datetime.utcnow(),
-        created_by=created_by,
-    )
+    if DepreciationRun is not None:
+        run = DepreciationRun.objects.create(
+            run_code=run_code,
+            period_year=year,
+            period_month=month,
+            run_type=run_type,
+            status='running',
+            started_at=datetime.utcnow(),
+            created_by=created_by,
+        )
+    else:
+        # fallback run object
+        from types import SimpleNamespace
+        run = SimpleNamespace(run_code=run_code, period_year=year, period_month=month, run_type=run_type, status='running', started_at=datetime.utcnow(), created_by=created_by, total_depreciation=Decimal('0.00'), error_log='')
 
     total_depr = Decimal('0.00')
     errors = []
@@ -86,7 +109,8 @@ def run_depreciation(run_type: str, year: int, month: int = None, created_by: st
             monthly_amount = _quantize(monthly * prorate_ratio)
 
             # Idempotency per-schedule
-            sch, created = DepreciationSchedule.objects.get_or_create(
+            if DepreciationSchedule is not None:
+                sch, created = DepreciationSchedule.objects.get_or_create(
                 asset=asset,
                 year=year,
                 month=month or 0,
@@ -100,9 +124,12 @@ def run_depreciation(run_type: str, year: int, month: int = None, created_by: st
                     'is_mid_year_acquisition': is_mid,
                     'mid_year_start_month': mid_start_month,
                     'partial_qty_ratio': Decimal('1.0'),
-                    'depreciation_run': run,
+                    'depreciation_run': run if DepreciationRun is not None else None,
                 }
             )
+            else:
+                sch = None
+                created = True
 
             if not created:
                 # If schedule already exists and is posted, do not re-run
@@ -136,13 +163,16 @@ def run_depreciation(run_type: str, year: int, month: int = None, created_by: st
                             {'account': accum_acc, 'description': f'Accumulated Depreciation {asset.assetCode}', 'debit': Decimal('0.00'), 'credit': monthly_amount},
                         ]
                         _post_gl(period, date(year, month or 1, 1), 'depreciation', voucher_ref, f'Depreciation for {asset.assetCode}', lines)
-                        sch.posted_status = 'posted'
-                        sch.posting_date = datetime.utcnow()
-                        sch.save()
+                        if DepreciationSchedule is not None and sch is not None:
+                            sch.posted_status = 'posted'
+                            sch.posting_date = datetime.utcnow()
+                            sch.save()
 
-                        # Update asset's accumulated and nbv
-                        asset.accumulated_depreciation = sch.accumulated_depr_after
-                        asset.nbv = sch.nbv_after
+                        # Update asset's accumulated and nbv (use computed values)
+                        acc_after = (_quantize((asset.accumulated_depreciation or Decimal('0.00')) + monthly_amount))
+                        nbv_after = _quantize((asset.nbv or Decimal('0.00')) - monthly_amount)
+                        asset.accumulated_depreciation = acc_after
+                        asset.nbv = nbv_after
                         asset.save()
                         total_depr += monthly_amount
                     else:
@@ -155,9 +185,17 @@ def run_depreciation(run_type: str, year: int, month: int = None, created_by: st
         except Exception as e:
             errors.append(f'Asset {asset.assetCode}: {str(e)}')
 
-    run.total_depreciation = _quantize(total_depr)
-    run.error_log = '\n'.join(errors)
-    run.status = 'completed' if not errors else 'failed'
-    run.completed_at = datetime.utcnow()
-    run.save()
-    return run
+    if DepreciationRun is not None:
+        run.total_depreciation = _quantize(total_depr)
+        run.error_log = '\n'.join(errors)
+        run.status = 'completed' if not errors else 'failed'
+        run.completed_at = datetime.utcnow()
+        run.save()
+        return run
+    else:
+        # fallback object
+        run.total_depreciation = _quantize(total_depr)
+        run.error_log = '\n'.join(errors)
+        run.status = 'completed' if not errors else 'failed'
+        run.completed_at = datetime.utcnow()
+        return run
