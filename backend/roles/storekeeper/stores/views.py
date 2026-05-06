@@ -1575,3 +1575,28 @@ class FixedAssetStatsView(APIView):
             'total_cost': float(total_cost),
             'total_nbv': float(total_nbv),
         })
+
+
+class DepreciationRunTriggerView(APIView):
+    """POST /assets/depreciation/run/ — Trigger a manual depreciation run."""
+    def post(self, request, *args, **kwargs):
+        year = request.data.get('year')
+        month = request.data.get('month')
+        run_type = request.data.get('type', 'monthly')
+        user = getattr(request, 'user', None)
+        username = user.username if user and not user.is_anonymous else 'api'
+
+        if not year:
+            return Response({'error': 'year is required'}, status=400)
+        try:
+            year = int(year)
+            month = int(month) if month else None
+        except Exception:
+            return Response({'error': 'invalid year/month'}, status=400)
+
+        try:
+            from .depreciation import run_depreciation
+            run = run_depreciation(run_type, year, month, created_by=username)
+            return Response({'run_code': run.run_code, 'status': run.status, 'total': float(run.total_depreciation)})
+        except Exception as e:
+            return Response({'error': str(e)}, status=400)
