@@ -817,3 +817,156 @@ class OverrideDecisionSerializer(serializers.Serializer):
     def create(self, validated_data):
         prompt_id = validated_data.pop('prompt_id')
         return apply_override(prompt_id=prompt_id, **validated_data)
+
+
+# =============================================================================
+# Phase 4 — Fixed Asset Register & Lifecycle Management Serializers
+# =============================================================================
+
+from .models import FixedAsset, AssetStatusHistory, AssetMaintenance, ASSET_STATUS_CHOICES
+
+
+class AssetStatusHistorySerializer(serializers.ModelSerializer):
+    """Serializer for asset status change audit trail."""
+    class Meta:
+        model = AssetStatusHistory
+        fields = '__all__'
+        read_only_fields = ['id', 'createdAt']
+
+
+class AssetMaintenanceSerializer(serializers.ModelSerializer):
+    """Serializer for asset maintenance records."""
+    class Meta:
+        model = AssetMaintenance
+        fields = '__all__'
+        read_only_fields = ['id', 'createdAt', 'updatedAt']
+
+
+class AssetMaintenanceCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating a new maintenance record."""
+    class Meta:
+        model = AssetMaintenance
+        fields = [
+            'asset', 'maintenance_type', 'description',
+            'scheduled_date', 'cost', 'vendor', 'notes', 'created_by',
+        ]
+
+
+class FixedAssetListSerializer(serializers.ModelSerializer):
+    """Lightweight list serializer for fixed assets."""
+    status_display = serializers.CharField(
+        source='get_status_display', read_only=True
+    )
+    depreciation_method_display = serializers.CharField(
+        source='get_depreciation_method_display', read_only=True
+    )
+
+    class Meta:
+        model = FixedAsset
+        fields = [
+            'id', 'assetCode', 'tag_no', 'name', 'category', 'category_type',
+            'asset_type', 'serial_no', 'qty', 'unit_cost', 'total_cost',
+            'status', 'status_display', 'location', 'custodian',
+            'depreciation_method', 'depreciation_method_display',
+            'accumulated_depreciation', 'nbv', 'acq_date',
+            'warranty_expiry', 'next_maintenance',
+            'parent_asset', 'createdAt', 'updatedAt',
+        ]
+        read_only_fields = fields
+
+
+class FixedAssetDetailSerializer(serializers.ModelSerializer):
+    """Full detail serializer for a single fixed asset."""
+    status_display = serializers.CharField(
+        source='get_status_display', read_only=True
+    )
+    depreciation_method_display = serializers.CharField(
+        source='get_depreciation_method_display', read_only=True
+    )
+    allowed_transitions = serializers.SerializerMethodField()
+    status_history = AssetStatusHistorySerializer(many=True, read_only=True)
+    maintenance_records = AssetMaintenanceSerializer(many=True, read_only=True)
+    child_assets = serializers.SerializerMethodField()
+
+    class Meta:
+        model = FixedAsset
+        fields = '__all__'
+        read_only_fields = [
+            'id', 'assetCode', 'nbv', 'accumulated_depreciation',
+            'createdAt', 'updatedAt',
+        ]
+
+    def get_allowed_transitions(self, obj):
+        return obj.get_allowed_transitions()
+
+    def get_child_assets(self, obj):
+        children = obj.child_assets.all()
+        return FixedAssetListSerializer(children, many=True).data
+
+
+class FixedAssetCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating a new fixed asset."""
+    class Meta:
+        model = FixedAsset
+        fields = [
+            'name', 'tag_no', 'category', 'category_type', 'asset_type',
+            'description', 'serial_no', 'unit',
+            'qty', 'unit_cost', 'total_cost',
+            'purchaseDate', 'acq_date', 'purchaseCost',
+            'supplier_id', 'supplier_name', 'funding_source',
+            'dept_id', 'dept_name', 'custodian_id', 'custodian',
+            'location_id', 'location',
+            'useful_life', 'residual_value', 'depreciation_method',
+            'warranty_expiry', 'next_maintenance',
+            'parent_asset', 'source_item', 'source_prompt',
+            'notes', 'created_by',
+        ]
+
+
+class FixedAssetStatusTransitionSerializer(serializers.Serializer):
+    """Serializer for transitioning an asset's status."""
+    new_status = serializers.ChoiceField(
+        required=True, choices=[c[0] for c in ASSET_STATUS_CHOICES],
+    )
+    changed_by = serializers.CharField(required=False, allow_blank=True, default='')
+    reason = serializers.CharField(required=False, allow_blank=True, default='')
+
+    def validate(self, data):
+        asset = self.context.get('asset')
+        new_status = data.get('new_status')
+        if asset and not asset.can_transition_to(new_status):
+            allowed = asset.get_allowed_transitions()
+            raise ValidationError(
+                f"Cannot transition from '{asset.status}' to '{new_status}'. "
+                f"Allowed transitions: {', '.join(allowed) if allowed else 'none (terminal state)'}"
+            )
+        return data
+
+
+class FixedAssetDisposalSerializer(serializers.Serializer):
+    """Serializer for disposing an asset (full or partial)."""
+    disposal_status = serializers.ChoiceField(
+        required=True, choices=['disposed', 'lost', 'obsolete'],
+    )
+    disposal_date = serializers.DateField(required=True)
+    disposal_value = serializers.DecimalField(
+        required=False, max_digits=12, decimal_places=2, default=0,
+    )
+    disposal_reason = serializers.CharField(required=True, allow_blank=False)
+    disposed_qty = serializers.IntegerField(
+        required=False, default=None, allow_null=True,
+        help_text="For partial disposal, specify qty to dispose. Omit for full disposal.",
+    )
+    changed_by = serializers.CharField(required=False, allow_blank=True, default='')
+
+    def validate_disposed_qty(self, value):
+        asset = self.context.get('asset')
+        if value is not None and asset:
+            if value <= 0:
+                raise ValidationError("disposed_qty must be positive.")
+            if value >= asset.qty:
+                raise ValidationError(
+                    f"disposed_qty ({value}) must be less than total qty ({asset.qty}). "
+                    "Use full disposal instead."
+                )
+        return value

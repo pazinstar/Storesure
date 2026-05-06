@@ -65,6 +65,14 @@ from .views import (
     ClassifyItemView,
     OverrideDecisionView,
     CapitalizationPendingPromptsView,
+    FixedAssetListView,
+    FixedAssetDetailView,
+    FixedAssetStatusTransitionView,
+    FixedAssetDisposalView,
+    FixedAssetStatusHistoryView,
+    FixedAssetMaintenanceListView,
+    FixedAssetMaintenanceDetailView,
+    FixedAssetStatsView,
 )
 
 urlpatterns = [
@@ -144,4 +152,14 @@ urlpatterns = [
     path('capitalization/prompts/<str:id>/', CapitalizationPromptDetailView.as_view(), name='storekeeper-cap-prompts-detail'),
     path('capitalization/classify/', ClassifyItemView.as_view(), name='storekeeper-cap-classify'),
     path('capitalization/override/', OverrideDecisionView.as_view(), name='storekeeper-cap-override'),
+
+    # Phase 4 — Fixed Asset Register & Lifecycle Management
+    path('assets/stats/', FixedAssetStatsView.as_view(), name='storekeeper-assets-stats'),
+    path('assets/', FixedAssetListView.as_view(), name='storekeeper-assets'),
+    path('assets/<str:id>/', FixedAssetDetailView.as_view(), name='storekeeper-assets-detail'),
+    path('assets/<str:id>/transition/', FixedAssetStatusTransitionView.as_view(), name='storekeeper-assets-transition'),
+    path('assets/<str:id>/dispose/', FixedAssetDisposalView.as_view(), name='storekeeper-assets-dispose'),
+    path('assets/<str:asset_id>/history/', FixedAssetStatusHistoryView.as_view(), name='storekeeper-assets-history'),
+    path('assets/<str:asset_id>/maintenance/', FixedAssetMaintenanceListView.as_view(), name='storekeeper-assets-maintenance'),
+    path('assets/<str:asset_id>/maintenance/<int:pk>/', FixedAssetMaintenanceDetailView.as_view(), name='storekeeper-assets-maintenance-detail'),
 ]

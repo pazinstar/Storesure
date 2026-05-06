@@ -1098,24 +1098,128 @@ class S2Ledger(models.Model):
         return f"{self.itemCode} (S2 Bal: {self.closingBalance})"
 
 
+ASSET_STATUS_CHOICES = [
+    ('procured', 'Procured'),
+    ('in_stores', 'In Stores'),
+    ('deployed', 'Deployed'),
+    ('active', 'Active'),
+    ('maintenance', 'Under Maintenance'),
+    ('damaged', 'Damaged'),
+    ('lost', 'Lost'),
+    ('obsolete', 'Obsolete'),
+    ('disposed', 'Disposed'),
+]
+
+ASSET_STATUS_TRANSITIONS = {
+    'procured': ['in_stores', 'damaged', 'lost', 'disposed'],
+    'in_stores': ['deployed', 'damaged', 'lost', 'obsolete', 'disposed'],
+    'deployed': ['active', 'maintenance', 'damaged', 'lost', 'obsolete', 'disposed'],
+    'active': ['maintenance', 'damaged', 'lost', 'obsolete', 'disposed'],
+    'maintenance': ['active', 'damaged', 'lost', 'obsolete', 'disposed'],
+    'damaged': ['maintenance', 'obsolete', 'disposed'],
+    'lost': ['disposed'],
+    'obsolete': ['disposed'],
+    'disposed': [],
+}
+
+DEPRECIATION_METHOD_CHOICES = [
+    ('straight_line', 'Straight Line'),
+    ('declining_balance', 'Declining Balance'),
+    ('sum_of_years', 'Sum of Years Digits'),
+    ('units_of_production', 'Units of Production'),
+    ('none', 'No Depreciation'),
+]
+
+
 class FixedAsset(models.Model):
     """
-    Fixed Asset Registry — tracks school fixed assets.
-    Migrations-only table; workflows implemented in later phases.
+    Fixed Asset Register — tracks school fixed assets with full lifecycle management.
+    Supports grouped assets (parent/child), status state machine, partial disposal,
+    maintenance scheduling, and depreciation tracking.
     """
     id = models.CharField(max_length=50, primary_key=True, blank=True)
     assetCode = models.CharField(max_length=100, unique=True, blank=True)
+    tag_no = models.CharField(max_length=100, blank=True, default='')
     name = models.CharField(max_length=255)
     category = models.CharField(max_length=100, blank=True, default='')
+    category_type = models.CharField(
+        max_length=20, choices=ItemTypeChoices.choices, blank=True, default=''
+    )
+    asset_type = models.CharField(max_length=100, blank=True, default='')
     description = models.TextField(blank=True, default='')
+    serial_no = models.CharField(max_length=255, blank=True, default='')
+    unit = models.CharField(max_length=50, blank=True, default='')
+
+    # Quantity & Cost
+    qty = models.IntegerField(default=1)
+    unit_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     purchaseDate = models.DateField(null=True, blank=True)
+    acq_date = models.DateField(null=True, blank=True)
     purchaseCost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     currentValue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    location = models.CharField(max_length=255, blank=True, default='')
+
+    # Supplier & Funding
+    supplier_id = models.CharField(max_length=100, blank=True, default='')
+    supplier_name = models.CharField(max_length=255, blank=True, default='')
+    funding_source = models.CharField(max_length=255, blank=True, default='')
+
+    # Department & Custodian
+    dept_id = models.CharField(max_length=100, blank=True, default='')
+    dept_name = models.CharField(max_length=255, blank=True, default='')
+    custodian_id = models.CharField(max_length=100, blank=True, default='')
     custodian = models.CharField(max_length=255, blank=True, default='')
+    location_id = models.CharField(max_length=100, blank=True, default='')
+    location = models.CharField(max_length=255, blank=True, default='')
+
+    # Depreciation
+    useful_life = models.IntegerField(default=0, help_text='Useful life in months')
     usefulLifeMonths = models.IntegerField(default=0)
-    status = models.CharField(max_length=50, default='active')
+    residual_value = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    depreciation_method = models.CharField(
+        max_length=30, choices=DEPRECIATION_METHOD_CHOICES,
+        default='straight_line',
+    )
+    accumulated_depreciation = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0
+    )
+    nbv = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text='Net Book Value'
+    )
+
+    # Lifecycle
+    status = models.CharField(
+        max_length=50, choices=ASSET_STATUS_CHOICES, default='procured'
+    )
+    warranty_expiry = models.DateField(null=True, blank=True)
+    next_maintenance = models.DateField(null=True, blank=True)
+
+    # Disposal
+    disposal_status = models.CharField(max_length=50, blank=True, default='')
+    disposal_date = models.DateField(null=True, blank=True)
+    disposal_value = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    disposal_reason = models.TextField(blank=True, default='')
+
+    # Grouped Asset Support
+    parent_asset = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='child_assets',
+    )
+
+    # Source Links
+    source_item = models.ForeignKey(
+        InventoryItem, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='fixed_assets',
+    )
+    source_prompt = models.ForeignKey(
+        'CapitalizationPrompt', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='fixed_assets',
+    )
+
+    # Audit
     notes = models.TextField(blank=True, default='')
+    created_by = models.CharField(max_length=255, blank=True, default='')
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
 
@@ -1124,8 +1228,127 @@ class FixedAsset(models.Model):
         verbose_name = 'Fixed Asset'
         verbose_name_plural = 'Fixed Assets'
 
+    def save(self, *args, **kwargs):
+        if not self.id:
+            from django.utils import timezone
+            year = timezone.now().year
+            last_asset = FixedAsset.objects.filter(
+                id__startswith=f'FA-{year}-'
+            ).order_by('-id').first()
+            if last_asset:
+                try:
+                    last_num = int(last_asset.id.split('-')[-1])
+                    self.id = f'FA-{year}-{last_num + 1:05d}'
+                except (ValueError, IndexError):
+                    self.id = f'FA-{year}-00001'
+            else:
+                self.id = f'FA-{year}-00001'
+
+        if not self.assetCode:
+            self.assetCode = self.id
+
+        # Auto-calculate NBV
+        if self.total_cost and self.accumulated_depreciation:
+            self.nbv = self.total_cost - self.accumulated_depreciation
+        elif self.total_cost:
+            self.nbv = self.total_cost
+
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.assetCode or self.id} - {self.name}"
+
+    def can_transition_to(self, new_status: str) -> bool:
+        """Check if status transition is valid per state machine."""
+        allowed = ASSET_STATUS_TRANSITIONS.get(self.status, [])
+        return new_status in allowed
+
+    def get_allowed_transitions(self) -> list:
+        """Return list of valid next statuses."""
+        return ASSET_STATUS_TRANSITIONS.get(self.status, [])
+
+    def calculate_nbv_after_partial_disposal(self, disposed_qty: int) -> dict:
+        """
+        Calculate proportional NBV adjustment for partial disposal.
+        Returns dict with adjustment details.
+        """
+        if disposed_qty <= 0 or disposed_qty >= self.qty:
+            return {
+                'error': 'disposed_qty must be between 1 and qty-1 for partial disposal',
+            }
+        ratio = disposed_qty / self.qty
+        nbv_reduction = round(self.nbv * ratio, 2)
+        cost_reduction = round(self.total_cost * ratio, 2)
+        remaining_qty = self.qty - disposed_qty
+        remaining_nbv = round(self.nbv - nbv_reduction, 2)
+        remaining_cost = round(self.total_cost - cost_reduction, 2)
+
+        return {
+            'disposed_qty': disposed_qty,
+            'remaining_qty': remaining_qty,
+            'nbv_reduction': nbv_reduction,
+            'remaining_nbv': remaining_nbv,
+            'cost_reduction': cost_reduction,
+            'remaining_cost': remaining_cost,
+            'ratio': round(ratio, 4),
+        }
+
+
+class AssetStatusHistory(models.Model):
+    """
+    Audit trail for every asset status change.
+    Records from/to status, who changed it, and why.
+    """
+    id = models.BigAutoField(primary_key=True)
+    asset = models.ForeignKey(
+        FixedAsset, on_delete=models.CASCADE,
+        related_name='status_history',
+    )
+    from_status = models.CharField(max_length=50, blank=True, default='')
+    to_status = models.CharField(max_length=50)
+    changed_by = models.CharField(max_length=255, blank=True, default='')
+    reason = models.TextField(blank=True, default='')
+    createdAt = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'stores_asset_status_history'
+        verbose_name = 'Asset Status History'
+        verbose_name_plural = 'Asset Status Histories'
+        ordering = ['-createdAt']
+
+    def __str__(self):
+        return f"{self.asset.assetCode}: {self.from_status} → {self.to_status}"
+
+
+class AssetMaintenance(models.Model):
+    """
+    Maintenance scheduling and tracking for fixed assets.
+    """
+    id = models.BigAutoField(primary_key=True)
+    asset = models.ForeignKey(
+        FixedAsset, on_delete=models.CASCADE,
+        related_name='maintenance_records',
+    )
+    maintenance_type = models.CharField(max_length=100, blank=True, default='')
+    description = models.TextField(blank=True, default='')
+    scheduled_date = models.DateField(null=True, blank=True)
+    completed_date = models.DateField(null=True, blank=True)
+    cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    vendor = models.CharField(max_length=255, blank=True, default='')
+    status = models.CharField(max_length=50, default='scheduled')
+    notes = models.TextField(blank=True, default='')
+    created_by = models.CharField(max_length=255, blank=True, default='')
+    createdAt = models.DateTimeField(auto_now_add=True)
+    updatedAt = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'stores_asset_maintenance'
+        verbose_name = 'Asset Maintenance'
+        verbose_name_plural = 'Asset Maintenances'
+        ordering = ['-scheduled_date']
+
+    def __str__(self):
+        return f"{self.asset.assetCode} - {self.maintenance_type} ({self.status})"
 
 
 class CapitalizationRule(models.Model):

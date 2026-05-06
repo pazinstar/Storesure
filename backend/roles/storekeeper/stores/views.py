@@ -1261,3 +1261,285 @@ class CapitalizationPendingPromptsView(APIView):
             'count': pending.count(),
             'results': serializer.data,
         })
+
+
+# =============================================================================
+# Phase 4 — Fixed Asset Register & Lifecycle Management Views
+# =============================================================================
+
+from .models import FixedAsset, AssetStatusHistory, AssetMaintenance
+from .serializers import (
+    FixedAssetListSerializer, FixedAssetDetailSerializer,
+    FixedAssetCreateSerializer, FixedAssetStatusTransitionSerializer,
+    FixedAssetDisposalSerializer,
+    AssetStatusHistorySerializer, AssetMaintenanceSerializer,
+    AssetMaintenanceCreateSerializer,
+)
+
+
+class FixedAssetListView(generics.ListCreateAPIView):
+    """
+    GET /assets/ — List all fixed assets.
+    POST /assets/ — Create a new fixed asset.
+    """
+    queryset = FixedAsset.objects.all().order_by('-createdAt')
+    serializer_class = FixedAssetListSerializer
+
+    def get_serializer_class(self):
+        if self.request.method == 'POST':
+            return FixedAssetCreateSerializer
+        return FixedAssetListSerializer
+
+    def perform_create(self, serializer):
+        asset = serializer.save()
+        # Log initial status in history
+        AssetStatusHistory.objects.create(
+            asset=asset,
+            from_status='',
+            to_status=asset.status,
+            changed_by=asset.created_by or '',
+            reason='Asset created',
+        )
+
+
+class FixedAssetDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET /assets/<id>/ — Get full detail of a fixed asset.
+    PUT/PATCH /assets/<id>/ — Update a fixed asset.
+    DELETE /assets/<id>/ — Delete a fixed asset.
+    """
+    queryset = FixedAsset.objects.all()
+    serializer_class = FixedAssetDetailSerializer
+    lookup_field = 'id'
+
+
+class FixedAssetStatusTransitionView(APIView):
+    """
+    POST /assets/<id>/transition/ — Transition asset status with audit trail.
+    """
+    def post(self, request, id, format=None):
+        from rest_framework import status
+        try:
+            asset = FixedAsset.objects.get(id=id)
+        except FixedAsset.DoesNotExist:
+            return Response({'detail': 'Asset not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = FixedAssetStatusTransitionSerializer(
+            data=request.data,
+            context={'asset': asset},
+        )
+        if serializer.is_valid():
+            new_status = serializer.validated_data['new_status']
+            changed_by = serializer.validated_data.get('changed_by', '')
+            reason = serializer.validated_data.get('reason', '')
+
+            old_status = asset.status
+            asset.status = new_status
+            asset.save()
+
+            # Log status change
+            AssetStatusHistory.objects.create(
+                asset=asset,
+                from_status=old_status,
+                to_status=new_status,
+                changed_by=changed_by,
+                reason=reason,
+            )
+
+            result_serializer = FixedAssetDetailSerializer(asset)
+            return Response(result_serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class FixedAssetDisposalView(APIView):
+    """
+    POST /assets/<id>/dispose/ — Dispose an asset (full or partial).
+    For partial disposal, creates a child asset for the remaining portion.
+    """
+    def post(self, request, id, format=None):
+        from rest_framework import status
+        try:
+            asset = FixedAsset.objects.get(id=id)
+        except FixedAsset.DoesNotExist:
+            return Response({'detail': 'Asset not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = FixedAssetDisposalSerializer(
+            data=request.data,
+            context={'asset': asset},
+        )
+        if serializer.is_valid():
+            disposal_status = serializer.validated_data['disposal_status']
+            disposal_date = serializer.validated_data['disposal_date']
+            disposal_value = serializer.validated_data.get('disposal_value', 0)
+            disposal_reason = serializer.validated_data['disposal_reason']
+            disposed_qty = serializer.validated_data.get('disposed_qty', None)
+            changed_by = serializer.validated_data.get('changed_by', '')
+
+            if disposed_qty is not None and disposed_qty < asset.qty:
+                # Partial disposal: split the asset
+                calc = asset.calculate_nbv_after_partial_disposal(disposed_qty)
+
+                # Create child asset for the remaining portion
+                child_asset = FixedAsset.objects.create(
+                    name=asset.name,
+                    tag_no=asset.tag_no,
+                    category=asset.category,
+                    category_type=asset.category_type,
+                    asset_type=asset.asset_type,
+                    description=asset.description,
+                    serial_no=asset.serial_no,
+                    unit=asset.unit,
+                    qty=calc['remaining_qty'],
+                    unit_cost=asset.unit_cost,
+                    total_cost=calc['remaining_cost'],
+                    purchaseDate=asset.purchaseDate,
+                    acq_date=asset.acq_date,
+                    purchaseCost=asset.purchaseCost,
+                    supplier_id=asset.supplier_id,
+                    supplier_name=asset.supplier_name,
+                    funding_source=asset.funding_source,
+                    dept_id=asset.dept_id,
+                    dept_name=asset.dept_name,
+                    custodian_id=asset.custodian_id,
+                    custodian=asset.custodian,
+                    location_id=asset.location_id,
+                    location=asset.location,
+                    useful_life=asset.useful_life,
+                    residual_value=asset.residual_value,
+                    depreciation_method=asset.depreciation_method,
+                    accumulated_depreciation=round(asset.accumulated_depreciation * calc['ratio'], 2) if asset.accumulated_depreciation else 0,
+                    nbv=calc['remaining_nbv'],
+                    status='active',
+                    parent_asset=asset.parent_asset or asset,
+                    source_item=asset.source_item,
+                    source_prompt=asset.source_prompt,
+                    notes=f"Remaining portion after partial disposal of {disposed_qty} units. {asset.notes or ''}",
+                    created_by=changed_by or asset.created_by,
+                )
+
+                # Update original asset to disposed portion
+                asset.qty = disposed_qty
+                asset.total_cost = calc['cost_reduction']
+                asset.nbv = calc['nbv_reduction']
+                asset.disposal_status = disposal_status
+                asset.disposal_date = disposal_date
+                asset.disposal_value = disposal_value
+                asset.disposal_reason = disposal_reason
+                asset.status = 'disposed'
+                asset.save()
+
+                # Log status change
+                AssetStatusHistory.objects.create(
+                    asset=asset,
+                    from_status=asset.status,
+                    to_status='disposed',
+                    changed_by=changed_by,
+                    reason=f"Partial disposal: {disposed_qty} units. {disposal_reason}",
+                )
+
+                return Response({
+                    'disposed_asset': FixedAssetDetailSerializer(asset).data,
+                    'remaining_asset': FixedAssetDetailSerializer(child_asset).data,
+                    'calculation': calc,
+                }, status=status.HTTP_200_OK)
+            else:
+                # Full disposal
+                old_status = asset.status
+                asset.disposal_status = disposal_status
+                asset.disposal_date = disposal_date
+                asset.disposal_value = disposal_value
+                asset.disposal_reason = disposal_reason
+                asset.status = 'disposed'
+                asset.save()
+
+                AssetStatusHistory.objects.create(
+                    asset=asset,
+                    from_status=old_status,
+                    to_status='disposed',
+                    changed_by=changed_by,
+                    reason=disposal_reason,
+                )
+
+                result_serializer = FixedAssetDetailSerializer(asset)
+                return Response(result_serializer.data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class FixedAssetStatusHistoryView(generics.ListAPIView):
+    """
+    GET /assets/<asset_id>/history/ — Get status change history for an asset.
+    """
+    serializer_class = AssetStatusHistorySerializer
+
+    def get_queryset(self):
+        asset_id = self.kwargs.get('asset_id')
+        return AssetStatusHistory.objects.filter(asset_id=asset_id).order_by('-createdAt')
+
+
+class FixedAssetMaintenanceListView(generics.ListCreateAPIView):
+    """
+    GET /assets/<asset_id>/maintenance/ — List maintenance records for an asset.
+    POST /assets/<asset_id>/maintenance/ — Schedule new maintenance.
+    """
+    serializer_class = AssetMaintenanceSerializer
+
+    def get_serializer_class(self):
+        if self.request.method == 'POST':
+            return AssetMaintenanceCreateSerializer
+        return AssetMaintenanceSerializer
+
+    def get_queryset(self):
+        asset_id = self.kwargs.get('asset_id')
+        return AssetMaintenance.objects.filter(asset_id=asset_id).order_by('-scheduled_date')
+
+    def perform_create(self, serializer):
+        asset_id = self.kwargs.get('asset_id')
+        try:
+            asset = FixedAsset.objects.get(id=asset_id)
+        except FixedAsset.DoesNotExist:
+            from rest_framework.exceptions import NotFound
+            raise NotFound('Asset not found.')
+        serializer.save(asset=asset)
+
+
+class FixedAssetMaintenanceDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET/PUT/PATCH/DELETE /assets/<asset_id>/maintenance/<pk>/ — Manage a maintenance record.
+    """
+    serializer_class = AssetMaintenanceSerializer
+
+    def get_queryset(self):
+        asset_id = self.kwargs.get('asset_id')
+        return AssetMaintenance.objects.filter(asset_id=asset_id)
+
+
+class FixedAssetStatsView(APIView):
+    """
+    GET /assets/stats/ — Aggregated stats for fixed assets dashboard.
+    """
+    def get(self, request, format=None):
+        total = FixedAsset.objects.count()
+        active = FixedAsset.objects.filter(status='active').count()
+        deployed = FixedAsset.objects.filter(status='deployed').count()
+        maintenance = FixedAsset.objects.filter(status='maintenance').count()
+        disposed = FixedAsset.objects.filter(status='disposed').count()
+        damaged = FixedAsset.objects.filter(status='damaged').count()
+
+        total_value_agg = FixedAsset.objects.aggregate(
+            total=models.Sum('total_cost'),
+            total_nbv=models.Sum('nbv'),
+        )
+        total_cost = total_value_agg.get('total') or 0
+        total_nbv = total_value_agg.get('total_nbv') or 0
+
+        return Response({
+            'total': total,
+            'active': active,
+            'deployed': deployed,
+            'under_maintenance': maintenance,
+            'disposed': disposed,
+            'damaged': damaged,
+            'total_cost': float(total_cost),
+            'total_nbv': float(total_nbv),
+        })

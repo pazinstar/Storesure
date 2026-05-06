@@ -10,7 +10,7 @@ from .models import (
     InventorySetting, PurchaseRequisition, Tender, Quotation,
     ProcurementReference, ProcurementContract, ContractMilestone,
     S2Ledger, FixedAsset, CapitalizationRule, CapitalizationSetting,
-    CapitalizationPrompt, LsoRecord,
+    CapitalizationPrompt, LsoRecord, AssetStatusHistory, AssetMaintenance,
 )
 
 
@@ -227,3 +227,17 @@ class LsoRecordAdmin(admin.ModelAdmin):
     list_display = ['id', 'lsoNumber', 'orderType', 'status', 'totalValue']
     list_filter = ['orderType', 'status']
     search_fields = ['lsoNumber', 'supplierName']
+
+
+@admin.register(AssetStatusHistory)
+class AssetStatusHistoryAdmin(admin.ModelAdmin):
+    list_display = ['id', 'asset', 'from_status', 'to_status', 'changed_by', 'createdAt']
+    list_filter = ['to_status']
+    search_fields = ['asset__assetCode', 'asset__name', 'changed_by']
+
+
+@admin.register(AssetMaintenance)
+class AssetMaintenanceAdmin(admin.ModelAdmin):
+    list_display = ['id', 'asset', 'maintenance_type', 'scheduled_date', 'status', 'cost']
+    list_filter = ['status', 'maintenance_type']
+    search_fields = ['asset__assetCode', 'asset__name', 'vendor']
