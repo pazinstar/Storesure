@@ -143,6 +143,10 @@ const Requisitions = () => {
     justification: "",
     budgetCode: "",
     estimate: "",
+    requiredBy: "",
+    account: "",
+    voteHead: "",
+    approvalLevel: 1,
   });
 
   const filteredRequisitions = requisitions.filter((req) => {
@@ -193,6 +197,10 @@ const Requisitions = () => {
       title: newReq.title,
       justification: newReq.justification,
       budgetCode: newReq.budgetCode,
+      requiredBy: newReq.requiredBy,
+      account: newReq.account,
+      voteHead: newReq.voteHead,
+      approvalLevel: newReq.approvalLevel,
     };
 
     createMutation.mutate(newRequisition, {
@@ -214,7 +222,7 @@ const Requisitions = () => {
 
         toast.success(asDraft ? "Requisition saved as draft" : "Requisition submitted for approval");
         setIsDialogOpen(false);
-        setNewReq({ department: "", priority: "", title: "", justification: "", budgetCode: "", estimate: "" });
+        setNewReq({ department: "", priority: "", title: "", justification: "", budgetCode: "", estimate: "", requiredBy: "", account: "", voteHead: "", approvalLevel: 1 });
       },
       onError: () => toast.error("Failed to create requisition")
     });
@@ -493,6 +501,47 @@ const Requisitions = () => {
                     placeholder="0"
                     value={newReq.estimate}
                     onChange={(e) => setNewReq({ ...newReq, estimate: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="requiredBy">Required By</Label>
+                  <Input
+                    id="requiredBy"
+                    type="date"
+                    value={newReq.requiredBy}
+                    onChange={(e) => setNewReq({ ...newReq, requiredBy: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="account">Account Code</Label>
+                  <Input
+                    id="account"
+                    placeholder="e.g., 4100-EDU"
+                    value={newReq.account}
+                    onChange={(e) => setNewReq({ ...newReq, account: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="voteHead">Vote Head</Label>
+                  <Input
+                    id="voteHead"
+                    placeholder="e.g., SCI-01"
+                    value={newReq.voteHead}
+                    onChange={(e) => setNewReq({ ...newReq, voteHead: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="approvalLevel">Approval Level</Label>
+                  <Input
+                    id="approvalLevel"
+                    type="number"
+                    min={1}
+                    value={newReq.approvalLevel}
+                    onChange={(e) => setNewReq({ ...newReq, approvalLevel: parseInt(e.target.value || '1') })}
                   />
                 </div>
               </div>

@@ -47,11 +47,21 @@ class AuditMiddleware:
                 payload = request.body.decode('utf-8')
             except Exception:
                 payload = str(request.POST.dict())
+            # resolver_match may be None at this stage for some requests
+            resolver = getattr(request, 'resolver_match', None)
+            entity_id = ''
+            try:
+                if resolver and getattr(resolver, 'kwargs', None):
+                    # prefer common identifier keys
+                    entity_id = resolver.kwargs.get('pk') or resolver.kwargs.get('id') or ''
+            except Exception:
+                entity_id = ''
+
             AuditLog.objects.create(
                 entity=request.path,
-                entity_id=request.resolver_match.kwargs.get('pk') if hasattr(request, 'resolver_match') else '',
+                entity_id=entity_id,
                 action=request.method,
-                user_id=getattr(request.user, 'username', 'anonymous') if hasattr(request, 'user') else 'system',
+                user_id=(getattr(request.user, 'username', 'anonymous') if getattr(request, 'user', None) else 'system'),
                 new_values=payload,
             )
 

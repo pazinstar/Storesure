@@ -124,6 +124,14 @@ const LPOManagement = () => {
   const [deliveryDate, setDeliveryDate] = useState("");
   const [paymentTerms, setPaymentTerms] = useState("");
   const [lpoValue, setLpoValue] = useState("");
+  const [deliveryLocation, setDeliveryLocation] = useState("");
+  const [account, setAccount] = useState("");
+  const [voteHead, setVoteHead] = useState("");
+  const [procurementMethod, setProcurementMethod] = useState("");
+  const [quotationRef, setQuotationRef] = useState("");
+  const [vatType, setVatType] = useState("");
+  const [vatAmount, setVatAmount] = useState("");
+  const [validUntil, setValidUntil] = useState("");
 
   const resetForm = () => {
     setSourceId("");
@@ -131,6 +139,14 @@ const LPOManagement = () => {
     setDeliveryDate("");
     setPaymentTerms("");
     setLpoValue("");
+    setDeliveryLocation("");
+    setAccount("");
+    setVoteHead("");
+    setProcurementMethod("");
+    setQuotationRef("");
+    setVatType("");
+    setVatAmount("");
+    setValidUntil("");
   };
 
   const handleCreateLPO = () => {
@@ -156,6 +172,15 @@ const LPOManagement = () => {
       status: "Pending Approval",
       paymentStatus: "Pending",
       deliveryStatus: 0,
+      delivery_location: deliveryLocation,
+      expected_delivery: deliveryDate,
+      account: account,
+      vote_head: voteHead,
+      procurement_method: procurementMethod || paymentTerms,
+      quotation_ref: quotationRef,
+      vat_type: vatType,
+      vat_amount: parseFloat(vatAmount || '0'),
+      valid_until: validUntil,
       notes: `Expected delivery: ${deliveryDate}, Terms: ${paymentTerms}`
     });
   };
@@ -259,6 +284,95 @@ const LPOManagement = () => {
                     placeholder="0.00"
                     value={lpoValue}
                     onChange={(e) => setLpoValue(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="deliveryLocation">Delivery Location</Label>
+                  <Input
+                    id="deliveryLocation"
+                    placeholder="Delivery location or address"
+                    value={deliveryLocation}
+                    onChange={(e) => setDeliveryLocation(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="account">Account Code</Label>
+                  <Input
+                    id="account"
+                    placeholder="e.g., 4100-EDU"
+                    value={account}
+                    onChange={(e) => setAccount(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="voteHead">Vote Head</Label>
+                  <Input
+                    id="voteHead"
+                    placeholder="e.g., SCI-01"
+                    value={voteHead}
+                    onChange={(e) => setVoteHead(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="procMethod">Procurement Method</Label>
+                  <Select value={procurementMethod} onValueChange={setProcurementMethod}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select method" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="direct">Direct Procurement</SelectItem>
+                      <SelectItem value="tender">Open Tender</SelectItem>
+                      <SelectItem value="quotation">Quotation</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="quotationRef">Quotation Ref</Label>
+                  <Input
+                    id="quotationRef"
+                    placeholder="Quotation reference"
+                    value={quotationRef}
+                    onChange={(e) => setQuotationRef(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="vatType">VAT Type</Label>
+                  <Select value={vatType} onValueChange={setVatType}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select VAT type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">None</SelectItem>
+                      <SelectItem value="inclusive">Inclusive</SelectItem>
+                      <SelectItem value="exclusive">Exclusive</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="vatAmount">VAT Amount (KES)</Label>
+                  <Input
+                    id="vatAmount"
+                    type="number"
+                    placeholder="0.00"
+                    value={vatAmount}
+                    onChange={(e) => setVatAmount(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="validUntil">Valid Until</Label>
+                  <Input
+                    id="validUntil"
+                    type="date"
+                    value={validUntil}
+                    onChange={(e) => setValidUntil(e.target.value)}
                   />
                 </div>
               </div>
