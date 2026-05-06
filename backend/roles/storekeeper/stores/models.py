@@ -121,13 +121,24 @@ class Delivery(models.Model):
     def __str__(self):
         return self.id
 
+
+
+
 class Requisition(models.Model):
     id = models.CharField(max_length=50, primary_key=True) # RQ001
     s12Number = models.CharField(max_length=100) # S12-2024-001
+    # New Phase 6 fields (backwards-compatible additions)
+    req_no = models.CharField(max_length=100, blank=True, default='')
     requestDate = models.DateField()
     requestingDepartment = models.CharField(max_length=255)
+    dept_id = models.CharField(max_length=50, blank=True, default='')
     requestedBy = models.CharField(max_length=255)
+    required_by = models.DateField(null=True, blank=True)
+    priority = models.CharField(max_length=30, blank=True, default='normal')
+    account = models.CharField(max_length=50, blank=True, default='')
+    vote_head = models.CharField(max_length=50, blank=True, default='')
     purpose = models.TextField(blank=True, null=True)
+    approval_level = models.PositiveIntegerField(default=0)
     status = models.CharField(max_length=100)
     receiverSignature = models.BooleanField(default=False)
     issuerSignature = models.BooleanField(default=False)
@@ -152,6 +163,9 @@ class Requisition(models.Model):
                 self.s12Number = f'S12/{year}/{month:02d}/0001'
         if not self.status:
             self.status = "Draft"
+        # Ensure req_no mirrors s12Number if not explicitly set
+        if not self.req_no:
+            self.req_no = self.s12Number
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -164,13 +178,25 @@ class RequisitionItem(models.Model):
     description = models.CharField(max_length=255)
     unit = models.CharField(max_length=50)
     quantityRequested = models.IntegerField(default=0)
+    req_qty = models.IntegerField(default=0)
     quantityApproved = models.IntegerField(default=0)
+    approved_qty = models.IntegerField(default=0)
     quantityIssued = models.IntegerField(default=0)
+    issued_qty = models.IntegerField(default=0)
+    in_stock = models.IntegerField(default=0)
+    available = models.IntegerField(default=0)
     unitPrice = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     
     def save(self, *args, **kwargs):
         if not self.id:
             self.id = str(uuid.uuid4())
+        # keep parity fields in sync
+        if not self.req_qty:
+            self.req_qty = self.quantityRequested
+        if not self.approved_qty:
+            self.approved_qty = self.quantityApproved
+        if not self.issued_qty:
+            self.issued_qty = self.quantityIssued
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -301,6 +327,16 @@ class PurchaseOrder(models.Model):
     approvedAt = models.DateTimeField(blank=True, null=True)
     linkedGRNs = models.JSONField(default=list)
     notes = models.TextField(blank=True, null=True)
+    # Phase 6 linkage fields
+    delivery_location = models.CharField(max_length=255, blank=True, null=True)
+    expected_delivery = models.DateField(blank=True, null=True)
+    account = models.CharField(max_length=50, blank=True, null=True)
+    vote_head = models.CharField(max_length=50, blank=True, null=True)
+    procurement_method = models.CharField(max_length=50, blank=True, null=True)
+    quotation_ref = models.CharField(max_length=100, blank=True, null=True)
+    vat_type = models.CharField(max_length=50, blank=True, null=True)
+    vat_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    valid_until = models.DateField(blank=True, null=True)
     createdAt = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     updatedAt = models.DateTimeField(auto_now=True, blank=True, null=True)
 
