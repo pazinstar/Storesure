@@ -928,25 +928,149 @@ class ContractMilestone(models.Model):
 
 
 # =============================================================================
-# Phase 1 — Foundation & Data Model: Empty tables (migrations only, no workflows)
+# Phase 2 — S2 Ledger & Core Stores Workflows
 # =============================================================================
+
+TRANSACTION_TYPE_CHOICES = [
+    ('receipt', 'Receipt (GRN → Store)'),
+    ('issue', 'Issue (Store → Dept)'),
+    ('transfer', 'Department Transfer'),
+    ('return', 'Return to Store'),
+    ('damage', 'Damage / Loss'),
+    ('condemn', 'Condemn / Write-off'),
+    ('adjustment', 'Stock Adjustment'),
+]
+
+ENTRY_STATUS_CHOICES = [
+    ('draft', 'Draft'),
+    ('posted', 'Posted'),
+    ('reversed', 'Reversed'),
+    ('locked', 'Audit Locked'),
+]
+
+
+class S2Transaction(models.Model):
+    """
+    Individual S2 ledger line entry — each row is a single transaction event
+    (receipt, issue, transfer, return, damage, etc.) with full audit trail.
+    """
+    id = models.CharField(max_length=50, primary_key=True, blank=True)
+    transaction_type = models.CharField(
+        max_length=20, choices=TRANSACTION_TYPE_CHOICES, db_index=True
+    )
+    status = models.CharField(
+        max_length=20, choices=ENTRY_STATUS_CHOICES, default='posted', db_index=True
+    )
+
+    # Reference / Linking
+    ref_no = models.CharField(max_length=100, blank=True, default='', db_index=True)
+    date = models.DateField(db_index=True)
+    item = models.ForeignKey(
+        InventoryItem, on_delete=models.PROTECT, null=True, blank=True,
+        related_name='s2_transactions'
+    )
+    item_code = models.CharField(max_length=100, blank=True, default='', db_index=True)
+    item_name = models.CharField(max_length=255, blank=True, default='')
+    category = models.CharField(max_length=100, blank=True, default='')
+    category_type = models.CharField(
+        max_length=20, choices=ItemTypeChoices.choices, blank=True, default=''
+    )
+    unit = models.CharField(max_length=50, blank=True, default='')
+
+    # Quantities & Values
+    qty_received = models.IntegerField(default=0)
+    qty_issued = models.IntegerField(default=0)
+    running_balance_before = models.IntegerField(default=0)
+    running_balance_after = models.IntegerField(default=0)
+    unit_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_value = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    # Foreign references
+    supplier_id = models.CharField(max_length=100, blank=True, default='')
+    supplier_name = models.CharField(max_length=255, blank=True, default='')
+    custodian_id = models.CharField(max_length=100, blank=True, default='')
+    custodian_name = models.CharField(max_length=255, blank=True, default='')
+    dept_id = models.CharField(max_length=100, blank=True, default='')
+    dept_name = models.CharField(max_length=255, blank=True, default='')
+
+    # Condition & Notes
+    condition = models.CharField(max_length=100, blank=True, default='')
+    remarks = models.TextField(blank=True, default='')
+
+    # Approval / Audit
+    created_by = models.CharField(max_length=255, blank=True, default='')
+    approved_by = models.CharField(max_length=255, blank=True, default='')
+    approved_at = models.DateTimeField(null=True, blank=True)
+
+    # Reversal linking
+    reversed_by = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='reversal_entries'
+    )
+    reversal_reason = models.TextField(blank=True, default='')
+
+    # Timestamps
+    createdAt = models.DateTimeField(auto_now_add=True)
+    updatedAt = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'stores_s2_transaction'
+        verbose_name = 'S2 Transaction'
+        verbose_name_plural = 'S2 Transactions'
+        ordering = ['-date', '-createdAt']
+
+    def save(self, *args, **kwargs):
+        if not self.id:
+            from django.utils import timezone
+            year = timezone.now().year
+            last_txn = S2Transaction.objects.filter(id__startswith=f'S2-{year}-').order_by('-id').first()
+            if last_txn:
+                try:
+                    last_num = int(last_txn.id.split('-')[-1])
+                    self.id = f'S2-{year}-{last_num + 1:05d}'
+                except (ValueError, IndexError):
+                    self.id = f'S2-{year}-00001'
+            else:
+                self.id = f'S2-{year}-00001'
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.id} ({self.get_transaction_type_display()})"
+
 
 class S2Ledger(models.Model):
     """
-    S2 (Storekeeper) Ledger — Government consumables ledger (S2/S13 alternative).
-    Migrations-only table; workflows implemented in later phases.
+    S2 (Storekeeper) Ledger — Running balance summary per item.
+    Updated atomically whenever a S2Transaction is posted.
     """
     id = models.CharField(max_length=50, primary_key=True, blank=True)
-    itemCode = models.CharField(max_length=100, db_index=True)
+    item = models.ForeignKey(
+        InventoryItem, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='s2_ledgers'
+    )
+    itemCode = models.CharField(max_length=100, unique=True, db_index=True)
     itemName = models.CharField(max_length=255, blank=True, default='')
+    category = models.CharField(max_length=100, blank=True, default='')
+    category_type = models.CharField(
+        max_length=20, choices=ItemTypeChoices.choices, blank=True, default=''
+    )
     unit = models.CharField(max_length=50, blank=True, default='')
     openingBalance = models.IntegerField(default=0)
     receiptsQty = models.IntegerField(default=0)
     receiptsValue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     issuesQty = models.IntegerField(default=0)
     issuesValue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    transfersOutQty = models.IntegerField(default=0)
+    transfersOutValue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    transfersInQty = models.IntegerField(default=0)
+    transfersInValue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    returnsQty = models.IntegerField(default=0)
+    returnsValue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    damagesQty = models.IntegerField(default=0)
+    damagesValue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     closingBalance = models.IntegerField(default=0)
     closingValue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    lastTransactionDate = models.DateField(null=True, blank=True)
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
 
@@ -955,8 +1079,23 @@ class S2Ledger(models.Model):
         verbose_name = 'S2 Ledger'
         verbose_name_plural = 'S2 Ledgers'
 
+    def save(self, *args, **kwargs):
+        if not self.id:
+            from django.utils import timezone
+            year = timezone.now().year
+            last_ledger = S2Ledger.objects.filter(id__startswith=f'SL-{year}-').order_by('-id').first()
+            if last_ledger:
+                try:
+                    last_num = int(last_ledger.id.split('-')[-1])
+                    self.id = f'SL-{year}-{last_num + 1:05d}'
+                except (ValueError, IndexError):
+                    self.id = f'SL-{year}-00001'
+            else:
+                self.id = f'SL-{year}-00001'
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        return f"{self.itemCode} (S2)"
+        return f"{self.itemCode} (S2 Bal: {self.closingBalance})"
 
 
 class FixedAsset(models.Model):

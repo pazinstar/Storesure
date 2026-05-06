@@ -433,3 +433,242 @@ class InventorySettingSerializer(serializers.ModelSerializer):
     class Meta:
         model = InventorySetting
         fields = '__all__'
+
+
+# =============================================================================
+# Phase 2 — S2 Ledger & Core Stores Workflows Serializers
+# =============================================================================
+
+from .models import S2Transaction, S2Ledger
+from .services import (
+    post_s2_receipt, post_s2_issue, post_s2_transfer,
+    post_s2_return, post_s2_damage, reverse_s2_transaction,
+    validate_s2_post,
+)
+
+
+class S2TransactionListSerializer(serializers.ModelSerializer):
+    """Lightweight list serializer for S2 transactions."""
+    transaction_type_display = serializers.CharField(
+        source='get_transaction_type_display', read_only=True
+    )
+    status_display = serializers.CharField(
+        source='get_status_display', read_only=True
+    )
+    item_name = serializers.CharField(read_only=True)
+    item_code = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = S2Transaction
+        fields = [
+            'id', 'transaction_type', 'transaction_type_display',
+            'status', 'status_display', 'ref_no', 'date',
+            'item_code', 'item_name', 'category',
+            'qty_received', 'qty_issued',
+            'running_balance_before', 'running_balance_after',
+            'unit_cost', 'total_value',
+            'supplier_name', 'custodian_name', 'dept_name',
+            'condition', 'remarks', 'created_by',
+            'createdAt', 'updatedAt',
+        ]
+        read_only_fields = fields
+
+
+class S2TransactionDetailSerializer(serializers.ModelSerializer):
+    """Full detail serializer for a single S2 transaction."""
+    transaction_type_display = serializers.CharField(
+        source='get_transaction_type_display', read_only=True
+    )
+    status_display = serializers.CharField(
+        source='get_status_display', read_only=True
+    )
+
+    class Meta:
+        model = S2Transaction
+        fields = '__all__'
+        read_only_fields = [
+            'id', 'running_balance_before', 'running_balance_after',
+            'status', 'createdAt', 'updatedAt', 'reversed_by',
+        ]
+
+
+class S2LedgerSerializer(serializers.ModelSerializer):
+    """Serializer for S2Ledger summary view."""
+    class Meta:
+        model = S2Ledger
+        fields = [
+            'id', 'itemCode', 'itemName', 'category', 'category_type',
+            'unit', 'openingBalance', 'receiptsQty', 'receiptsValue',
+            'issuesQty', 'issuesValue', 'transfersOutQty', 'transfersOutValue',
+            'transfersInQty', 'transfersInValue', 'returnsQty', 'returnsValue',
+            'damagesQty', 'damagesValue', 'closingBalance', 'closingValue',
+            'lastTransactionDate', 'createdAt', 'updatedAt',
+        ]
+
+
+class S2ReceiptSerializer(serializers.Serializer):
+    """Serializer for posting a GRN→Store receipt."""
+    item_id = serializers.CharField(required=True)
+    date = serializers.DateField(required=True)
+    qty = serializers.IntegerField(required=True, min_value=1)
+    unit_cost = serializers.DecimalField(required=True, max_digits=12, decimal_places=2, min_value=0)
+    supplier_id = serializers.CharField(required=False, allow_blank=True, default='')
+    supplier_name = serializers.CharField(required=False, allow_blank=True, default='')
+    ref_no = serializers.CharField(required=False, allow_blank=True, default='')
+    condition = serializers.CharField(required=False, allow_blank=True, default='')
+    remarks = serializers.CharField(required=False, allow_blank=True, default='')
+    created_by = serializers.CharField(required=False, allow_blank=True, default='')
+
+    def validate_item_id(self, value):
+        try:
+            item = InventoryItem.objects.get(id=value)
+        except InventoryItem.DoesNotExist:
+            raise ValidationError(f"Item with id '{value}' not found.")
+        return item
+
+    def create(self, validated_data):
+        item = validated_data.pop('item_id')
+        qty = validated_data.pop('qty')
+        unit_cost = validated_data.pop('unit_cost')
+        return post_s2_receipt(item=item, qty=qty, unit_cost=unit_cost, **validated_data)
+
+
+class S2IssueSerializer(serializers.Serializer):
+    """Serializer for posting a Store→Department issue."""
+    item_id = serializers.CharField(required=True)
+    date = serializers.DateField(required=True)
+    qty = serializers.IntegerField(required=True, min_value=1)
+    unit_cost = serializers.DecimalField(required=True, max_digits=12, decimal_places=2, min_value=0)
+    custodian_id = serializers.CharField(required=False, allow_blank=True, default='')
+    custodian_name = serializers.CharField(required=False, allow_blank=True, default='')
+    dept_id = serializers.CharField(required=False, allow_blank=True, default='')
+    dept_name = serializers.CharField(required=False, allow_blank=True, default='')
+    ref_no = serializers.CharField(required=False, allow_blank=True, default='')
+    condition = serializers.CharField(required=False, allow_blank=True, default='')
+    remarks = serializers.CharField(required=False, allow_blank=True, default='')
+    created_by = serializers.CharField(required=False, allow_blank=True, default='')
+
+    def validate_item_id(self, value):
+        try:
+            item = InventoryItem.objects.get(id=value)
+        except InventoryItem.DoesNotExist:
+            raise ValidationError(f"Item with id '{value}' not found.")
+        return item
+
+    def create(self, validated_data):
+        item = validated_data.pop('item_id')
+        qty = validated_data.pop('qty')
+        unit_cost = validated_data.pop('unit_cost')
+        return post_s2_issue(item=item, qty=qty, unit_cost=unit_cost, **validated_data)
+
+
+class S2TransferSerializer(serializers.Serializer):
+    """Serializer for posting a department transfer."""
+    item_id = serializers.CharField(required=True)
+    date = serializers.DateField(required=True)
+    qty = serializers.IntegerField(required=True, min_value=1)
+    unit_cost = serializers.DecimalField(required=True, max_digits=12, decimal_places=2, min_value=0)
+    from_dept_id = serializers.CharField(required=False, allow_blank=True, default='')
+    from_dept_name = serializers.CharField(required=False, allow_blank=True, default='')
+    to_dept_id = serializers.CharField(required=False, allow_blank=True, default='')
+    to_dept_name = serializers.CharField(required=False, allow_blank=True, default='')
+    custodian_id = serializers.CharField(required=False, allow_blank=True, default='')
+    custodian_name = serializers.CharField(required=False, allow_blank=True, default='')
+    ref_no = serializers.CharField(required=False, allow_blank=True, default='')
+    remarks = serializers.CharField(required=False, allow_blank=True, default='')
+    created_by = serializers.CharField(required=False, allow_blank=True, default='')
+
+    def validate_item_id(self, value):
+        try:
+            item = InventoryItem.objects.get(id=value)
+        except InventoryItem.DoesNotExist:
+            raise ValidationError(f"Item with id '{value}' not found.")
+        return item
+
+    def create(self, validated_data):
+        item = validated_data.pop('item_id')
+        qty = validated_data.pop('qty')
+        unit_cost = validated_data.pop('unit_cost')
+        out_txn, in_txn = post_s2_transfer(
+            item=item, qty=qty, unit_cost=unit_cost, **validated_data
+        )
+        return out_txn
+
+
+class S2ReturnSerializer(serializers.Serializer):
+    """Serializer for posting a Return to Store."""
+    item_id = serializers.CharField(required=True)
+    date = serializers.DateField(required=True)
+    qty = serializers.IntegerField(required=True, min_value=1)
+    unit_cost = serializers.DecimalField(required=True, max_digits=12, decimal_places=2, min_value=0)
+    dept_id = serializers.CharField(required=False, allow_blank=True, default='')
+    dept_name = serializers.CharField(required=False, allow_blank=True, default='')
+    custodian_id = serializers.CharField(required=False, allow_blank=True, default='')
+    custodian_name = serializers.CharField(required=False, allow_blank=True, default='')
+    ref_no = serializers.CharField(required=False, allow_blank=True, default='')
+    condition = serializers.CharField(required=False, allow_blank=True, default='')
+    remarks = serializers.CharField(required=False, allow_blank=True, default='')
+    created_by = serializers.CharField(required=False, allow_blank=True, default='')
+
+    def validate_item_id(self, value):
+        try:
+            item = InventoryItem.objects.get(id=value)
+        except InventoryItem.DoesNotExist:
+            raise ValidationError(f"Item with id '{value}' not found.")
+        return item
+
+    def create(self, validated_data):
+        item = validated_data.pop('item_id')
+        qty = validated_data.pop('qty')
+        unit_cost = validated_data.pop('unit_cost')
+        return post_s2_return(item=item, qty=qty, unit_cost=unit_cost, **validated_data)
+
+
+class S2DamageSerializer(serializers.Serializer):
+    """Serializer for posting a Damage/Loss/Condemn transaction."""
+    item_id = serializers.CharField(required=True)
+    date = serializers.DateField(required=True)
+    qty = serializers.IntegerField(required=True, min_value=1)
+    unit_cost = serializers.DecimalField(required=True, max_digits=12, decimal_places=2, min_value=0)
+    custodian_id = serializers.CharField(required=False, allow_blank=True, default='')
+    custodian_name = serializers.CharField(required=False, allow_blank=True, default='')
+    dept_id = serializers.CharField(required=False, allow_blank=True, default='')
+    dept_name = serializers.CharField(required=False, allow_blank=True, default='')
+    ref_no = serializers.CharField(required=False, allow_blank=True, default='')
+    remarks = serializers.CharField(required=False, allow_blank=True, default='')
+    created_by = serializers.CharField(required=False, allow_blank=True, default='')
+
+    def validate_item_id(self, value):
+        try:
+            item = InventoryItem.objects.get(id=value)
+        except InventoryItem.DoesNotExist:
+            raise ValidationError(f"Item with id '{value}' not found.")
+        return item
+
+    def create(self, validated_data):
+        item = validated_data.pop('item_id')
+        qty = validated_data.pop('qty')
+        unit_cost = validated_data.pop('unit_cost')
+        return post_s2_damage(item=item, qty=qty, unit_cost=unit_cost, **validated_data)
+
+
+class S2ReversalSerializer(serializers.Serializer):
+    """Serializer for reversing a posted S2 transaction."""
+    transaction_id = serializers.CharField(required=True)
+    reason = serializers.CharField(required=True, allow_blank=False)
+    reversed_by = serializers.CharField(required=False, allow_blank=True, default='')
+
+    def validate_transaction_id(self, value):
+        try:
+            txn = S2Transaction.objects.get(id=value)
+        except S2Transaction.DoesNotExist:
+            raise ValidationError(f"Transaction with id '{value}' not found.")
+        if txn.status == 'reversed':
+            raise ValidationError("Transaction has already been reversed.")
+        return txn
+
+    def create(self, validated_data):
+        txn = validated_data.pop('transaction_id')
+        reason = validated_data.pop('reason')
+        reversed_by = validated_data.pop('reversed_by', '')
+        return reverse_s2_transaction(txn, reversed_by=reversed_by, reason=reason)

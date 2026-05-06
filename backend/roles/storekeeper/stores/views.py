@@ -976,3 +976,155 @@ class DisposalRecordListCreateView(generics.ListCreateAPIView):
     from .serializers import DisposalRecordSerializer
     queryset = DisposalRecord.objects.all().order_by('-id')
     serializer_class = DisposalRecordSerializer
+
+
+# =============================================================================
+# Phase 2 — S2 Ledger & Core Stores Workflows Views
+# =============================================================================
+
+from .models import S2Transaction, S2Ledger
+from .serializers import (
+    S2TransactionListSerializer, S2TransactionDetailSerializer,
+    S2LedgerSerializer, S2ReceiptSerializer, S2IssueSerializer,
+    S2TransferSerializer, S2ReturnSerializer, S2DamageSerializer,
+    S2ReversalSerializer,
+)
+
+
+class S2TransactionListView(generics.ListCreateAPIView):
+    """
+    GET /s2/transactions/ — List all S2 transactions (paginated).
+    POST /s2/transactions/ — Not used directly; use dedicated endpoints.
+    """
+    queryset = S2Transaction.objects.all().order_by('-date', '-createdAt')
+    serializer_class = S2TransactionListSerializer
+
+
+class S2TransactionDetailView(generics.RetrieveAPIView):
+    """
+    GET /s2/transactions/<id>/ — Get detail of a single S2 transaction.
+    """
+    queryset = S2Transaction.objects.all()
+    serializer_class = S2TransactionDetailSerializer
+    lookup_field = 'id'
+
+
+class S2LedgerListView(generics.ListAPIView):
+    """
+    GET /s2/ledger/ — List all S2 ledger summaries.
+    """
+    queryset = S2Ledger.objects.all().order_by('itemCode')
+    serializer_class = S2LedgerSerializer
+
+
+class S2LedgerDetailView(generics.RetrieveAPIView):
+    """
+    GET /s2/ledger/<itemCode>/ — Get S2 ledger summary for an item.
+    """
+    queryset = S2Ledger.objects.all()
+    serializer_class = S2LedgerSerializer
+    lookup_field = 'itemCode'
+
+
+class S2ReceiptView(APIView):
+    """
+    POST /s2/receipt/ — Post a GRN→Store receipt to the S2 ledger.
+    """
+    def post(self, request, format=None):
+        from rest_framework import status
+        serializer = S2ReceiptSerializer(data=request.data)
+        if serializer.is_valid():
+            try:
+                txn = serializer.save()
+                result_serializer = S2TransactionDetailSerializer(txn)
+                return Response(result_serializer.data, status=status.HTTP_201_CREATED)
+            except Exception as e:
+                return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class S2IssueView(APIView):
+    """
+    POST /s2/issue/ — Post a Store→Department issue to the S2 ledger.
+    """
+    def post(self, request, format=None):
+        from rest_framework import status
+        serializer = S2IssueSerializer(data=request.data)
+        if serializer.is_valid():
+            try:
+                txn = serializer.save()
+                result_serializer = S2TransactionDetailSerializer(txn)
+                return Response(result_serializer.data, status=status.HTTP_201_CREATED)
+            except Exception as e:
+                return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class S2TransferView(APIView):
+    """
+    POST /s2/transfer/ — Post a department transfer (two-leg entry).
+    """
+    def post(self, request, format=None):
+        from rest_framework import status
+        serializer = S2TransferSerializer(data=request.data)
+        if serializer.is_valid():
+            try:
+                out_txn = serializer.save()
+                result_serializer = S2TransactionDetailSerializer(out_txn)
+                return Response(result_serializer.data, status=status.HTTP_201_CREATED)
+            except Exception as e:
+                return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class S2ReturnView(APIView):
+    """
+    POST /s2/return/ — Post a Return to Store transaction.
+    """
+    def post(self, request, format=None):
+        from rest_framework import status
+        serializer = S2ReturnSerializer(data=request.data)
+        if serializer.is_valid():
+            try:
+                txn = serializer.save()
+                result_serializer = S2TransactionDetailSerializer(txn)
+                return Response(result_serializer.data, status=status.HTTP_201_CREATED)
+            except Exception as e:
+                return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class S2DamageView(APIView):
+    """
+    POST /s2/damage/ — Post a Damage/Loss/Condemn transaction.
+    Creates an audit-locked entry.
+    """
+    def post(self, request, format=None):
+        from rest_framework import status
+        serializer = S2DamageSerializer(data=request.data)
+        if serializer.is_valid():
+            try:
+                txn = serializer.save()
+                result_serializer = S2TransactionDetailSerializer(txn)
+                return Response(result_serializer.data, status=status.HTTP_201_CREATED)
+            except Exception as e:
+                return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class S2ReversalView(APIView):
+    """
+    POST /s2/reverse/ — Reverse a posted transaction.
+    Creates an adjustment entry and marks original as reversed.
+    """
+    def post(self, request, format=None):
+        from rest_framework import status
+        serializer = S2ReversalSerializer(data=request.data)
+        if serializer.is_valid():
+            try:
+                reversal = serializer.save()
+                result_serializer = S2TransactionDetailSerializer(reversal)
+                return Response(result_serializer.data, status=status.HTTP_201_CREATED)
+            except Exception as e:
+                return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

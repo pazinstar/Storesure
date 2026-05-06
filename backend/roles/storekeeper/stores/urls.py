@@ -46,7 +46,17 @@ from .views import (
     RetentionRecordDetailView,
     AppraisalWorkflowListCreateView,
     AppraisalWorkflowDetailView,
-    DisposalRecordListCreateView
+    DisposalRecordListCreateView,
+    S2TransactionListView,
+    S2TransactionDetailView,
+    S2LedgerListView,
+    S2LedgerDetailView,
+    S2ReceiptView,
+    S2IssueView,
+    S2TransferView,
+    S2ReturnView,
+    S2DamageView,
+    S2ReversalView,
 )
 
 urlpatterns = [
@@ -104,4 +114,16 @@ urlpatterns = [
     path('dashboard/low-stock/', DashboardLowStockView.as_view(), name='storekeeper-dashboard-low-stock-slash'),
     path('dashboard/stats', DashboardStatsView.as_view(), name='storekeeper-dashboard-stats'),
     path('dashboard/stats/', DashboardStatsView.as_view(), name='storekeeper-dashboard-stats-slash'),
+
+    # Phase 2 — S2 Ledger & Core Stores Workflows
+    path('s2/transactions/', S2TransactionListView.as_view(), name='storekeeper-s2-transactions'),
+    path('s2/transactions/<str:id>/', S2TransactionDetailView.as_view(), name='storekeeper-s2-transactions-detail'),
+    path('s2/ledger/', S2LedgerListView.as_view(), name='storekeeper-s2-ledger'),
+    path('s2/ledger/<str:itemCode>/', S2LedgerDetailView.as_view(), name='storekeeper-s2-ledger-detail'),
+    path('s2/receipt/', S2ReceiptView.as_view(), name='storekeeper-s2-receipt'),
+    path('s2/issue/', S2IssueView.as_view(), name='storekeeper-s2-issue'),
+    path('s2/transfer/', S2TransferView.as_view(), name='storekeeper-s2-transfer'),
+    path('s2/return/', S2ReturnView.as_view(), name='storekeeper-s2-return'),
+    path('s2/damage/', S2DamageView.as_view(), name='storekeeper-s2-damage'),
+    path('s2/reverse/', S2ReversalView.as_view(), name='storekeeper-s2-reverse'),
 ]
