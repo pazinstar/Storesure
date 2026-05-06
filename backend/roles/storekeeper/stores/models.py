@@ -1032,6 +1032,30 @@ class S2Transaction(models.Model):
                     self.id = f'S2-{year}-00001'
             else:
                 self.id = f'S2-{year}-00001'
+        # Prevent direct edits to core posting fields for already-posted entries.
+        if self.pk:
+            try:
+                orig = S2Transaction.objects.get(pk=self.pk)
+            except S2Transaction.DoesNotExist:
+                orig = None
+            protected_fields = {
+                'transaction_type', 'item_id', 'item_code', 'item_name',
+                'qty_received', 'qty_issued', 'unit_cost', 'total_value',
+                'running_balance_before', 'running_balance_after', 'date', 'ref_no'
+            }
+            if orig and orig.status == 'posted':
+                # Allow changes only to status/reversal fields via controlled workflows.
+                changed = False
+                for field in protected_fields:
+                    # Map model attr names when necessary
+                    attr = field
+                    if hasattr(orig, attr) and getattr(orig, attr) != getattr(self, attr):
+                        changed = True
+                        break
+                if changed:
+                    from django.core.exceptions import ValidationError
+                    raise ValidationError("Editing posted S2 transactions is not allowed. Use reversal/adjustment workflows.")
+
         super().save(*args, **kwargs)
 
     def __str__(self):
