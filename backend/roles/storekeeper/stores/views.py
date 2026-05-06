@@ -1128,3 +1128,136 @@ class S2ReversalView(APIView):
             except Exception as e:
                 return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+# =============================================================================
+# Phase 3 — Capitalization Rules Engine & Decision Assistant Views
+# =============================================================================
+
+from .models import CapitalizationRule, CapitalizationSetting, CapitalizationPrompt
+from .serializers import (
+    CapitalizationRuleSerializer, CapitalizationSettingSerializer,
+    CapitalizationPromptListSerializer, CapitalizationPromptDetailSerializer,
+    ClassifyItemSerializer, OverrideDecisionSerializer,
+)
+
+
+class CapitalizationRuleListView(generics.ListCreateAPIView):
+    """
+    GET /capitalization/rules/ — List all capitalization rules.
+    POST /capitalization/rules/ — Create a new rule.
+    """
+    queryset = CapitalizationRule.objects.all().order_by('priority', 'id')
+    serializer_class = CapitalizationRuleSerializer
+
+
+class CapitalizationRuleDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET/PUT/PATCH/DELETE /capitalization/rules/<id>/ — Manage a single rule.
+    """
+    queryset = CapitalizationRule.objects.all()
+    serializer_class = CapitalizationRuleSerializer
+
+
+class CapitalizationSettingView(APIView):
+    """
+    GET /capitalization/settings/ — Get global capitalization settings.
+    PUT /capitalization/settings/ — Update global settings.
+    """
+    def get(self, request, format=None):
+        from .capitalization_engine import get_cap_settings
+        settings = get_cap_settings()
+        serializer = CapitalizationSettingSerializer(settings)
+        return Response(serializer.data)
+
+    def put(self, request, format=None):
+        from .capitalization_engine import get_cap_settings
+        settings = get_cap_settings()
+        serializer = CapitalizationSettingSerializer(
+            settings, data=request.data, partial=True
+        )
+        if serializer.is_valid():
+            serializer.save(updated_by=request.user.username if hasattr(request, 'user') and not request.user.is_anonymous else '')
+            return Response(serializer.data)
+        return Response(serializer.errors, status=400)
+
+
+class CapitalizationPromptListView(generics.ListAPIView):
+    """
+    GET /capitalization/prompts/ — List all capitalization prompts (pending first).
+    """
+    queryset = CapitalizationPrompt.objects.all().order_by('-createdAt')
+    serializer_class = CapitalizationPromptListSerializer
+
+
+class CapitalizationPromptDetailView(generics.RetrieveAPIView):
+    """
+    GET /capitalization/prompts/<id>/ — Get full detail of a prompt.
+    """
+    queryset = CapitalizationPrompt.objects.all()
+    serializer_class = CapitalizationPromptDetailSerializer
+    lookup_field = 'id'
+
+
+class ClassifyItemView(APIView):
+    """
+    POST /capitalization/classify/ — Run rule engine and auto-classify an item.
+    Logs the decision as a CapitalizationPrompt.
+    """
+    def post(self, request, format=None):
+        from rest_framework import status
+        serializer = ClassifyItemSerializer(data=request.data)
+        if serializer.is_valid():
+            try:
+                result = serializer.save()
+                # result contains prompt + classification
+                from .capitalization_engine import ClassificationResult
+                prompt_serializer = CapitalizationPromptDetailSerializer(result['prompt'])
+                response_data = {
+                    'prompt': prompt_serializer.data,
+                    'classification': {
+                        'suggested_category_type': result['classification'].suggested_category_type,
+                        'suggested_action': result['classification'].suggested_action,
+                        'applied_rule': result['classification'].applied_rule,
+                        'rule_label': result['classification'].rule_label,
+                        'is_bulk': result['classification'].is_bulk,
+                        'override_required': result['classification'].override_required,
+                    }
+                }
+                return Response(response_data, status=status.HTTP_201_CREATED)
+            except Exception as e:
+                return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class OverrideDecisionView(APIView):
+    """
+    POST /capitalization/override/ — Apply a user override to a prompt.
+    Records reason, approval, and updates item if capitalize.
+    """
+    def post(self, request, format=None):
+        from rest_framework import status
+        serializer = OverrideDecisionSerializer(data=request.data)
+        if serializer.is_valid():
+            try:
+                prompt = serializer.save()
+                prompt_serializer = CapitalizationPromptDetailSerializer(prompt)
+                return Response(prompt_serializer.data, status=status.HTTP_200_OK)
+            except Exception as e:
+                return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CapitalizationPendingPromptsView(APIView):
+    """
+    GET /capitalization/prompts/pending/ — Get counts and list of pending override items.
+    """
+    def get(self, request, format=None):
+        pending = CapitalizationPrompt.objects.filter(
+            approval_status='pending'
+        ).order_by('-createdAt')
+        serializer = CapitalizationPromptListSerializer(pending, many=True)
+        return Response({
+            'count': pending.count(),
+            'results': serializer.data,
+        })

@@ -9,7 +9,8 @@ from .models import (
     FileMovement, RetentionRecord, AppraisalWorkflow, DisposalRecord,
     InventorySetting, PurchaseRequisition, Tender, Quotation,
     ProcurementReference, ProcurementContract, ContractMilestone,
-    S2Ledger, FixedAsset, CapitalizationRule, LsoRecord,
+    S2Ledger, FixedAsset, CapitalizationRule, CapitalizationSetting,
+    CapitalizationPrompt, LsoRecord,
 )
 
 
@@ -203,8 +204,22 @@ class FixedAssetAdmin(admin.ModelAdmin):
 
 @admin.register(CapitalizationRule)
 class CapitalizationRuleAdmin(admin.ModelAdmin):
-    list_display = ['id', 'categoryType', 'minCost', 'minUsefulLifeMonths', 'isActive']
-    list_filter = ['isActive', 'categoryType']
+    list_display = ['id', 'rule_code', 'categoryType', 'minCost', 'minUsefulLifeMonths', 'action', 'isActive', 'priority']
+    list_filter = ['isActive', 'categoryType', 'action']
+    search_fields = ['rule_code', 'rule_label']
+
+
+@admin.register(CapitalizationSetting)
+class CapitalizationSettingAdmin(admin.ModelAdmin):
+    list_display = ['id', 'threshold', 'bulk_materiality', 'min_useful_life', 'default_residual_pct']
+    search_fields = []
+
+
+@admin.register(CapitalizationPrompt)
+class CapitalizationPromptAdmin(admin.ModelAdmin):
+    list_display = ['id', 'item_code', 'item_name', 'suggested_action', 'applied_rule', 'approval_status', 'is_bulk']
+    list_filter = ['approval_status', 'suggested_action', 'is_bulk']
+    search_fields = ['item_code', 'item_name', 'id']
 
 
 @admin.register(LsoRecord)

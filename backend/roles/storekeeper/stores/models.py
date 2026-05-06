@@ -1131,18 +1131,53 @@ class FixedAsset(models.Model):
 class CapitalizationRule(models.Model):
     """
     Capitalization threshold rules — determines when an item is capitalized.
-    Migrations-only table; workflows implemented in later phases.
+    Rules are evaluated in order (A, B, C, D) by the rule engine.
     """
     id = models.BigAutoField(primary_key=True)
+    rule_code = models.CharField(
+        max_length=10, unique=True, blank=True,
+        help_text="Rule identifier: A, B, C, or D"
+    )
     categoryType = models.CharField(
         max_length=20,
         choices=ItemTypeChoices.choices,
         default=ItemTypeChoices.FIXED_ASSET,
         help_text="Item type this rule applies to"
     )
-    minCost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    minUsefulLifeMonths = models.IntegerField(default=12)
+    rule_label = models.CharField(
+        max_length=100, blank=True, default='',
+        help_text="Human-readable rule description"
+    )
+    minCost = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Minimum unit cost to trigger capitalization"
+    )
+    minUsefulLifeMonths = models.IntegerField(
+        default=12,
+        help_text="Minimum useful life in months"
+    )
+    bulkThreshold = models.IntegerField(
+        default=1,
+        help_text="Quantity threshold for bulk/grouped treatment (Rule D)"
+    )
+    bulkMateriality = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Total value threshold for bulk materiality"
+    )
+    action = models.CharField(
+        max_length=30, default='expense',
+        choices=[
+            ('expense', 'Expense Immediately'),
+            ('capitalize', 'Capitalize as Asset'),
+            ('prompt', 'Prompt for Decision'),
+        ],
+        help_text="Action to take when rule matches"
+    )
     description = models.TextField(blank=True, default='')
+    priority = models.IntegerField(
+        default=0,
+        help_text="Evaluation priority (lower = evaluated first)"
+    )
     isActive = models.BooleanField(default=True)
     createdAt = models.DateTimeField(auto_now_add=True)
 
@@ -1150,9 +1185,176 @@ class CapitalizationRule(models.Model):
         db_table = 'stores_capitalization_rule'
         verbose_name = 'Capitalization Rule'
         verbose_name_plural = 'Capitalization Rules'
+        ordering = ['priority', 'id']
+
+    def save(self, *args, **kwargs):
+        if not self.rule_code:
+            last_rule = CapitalizationRule.objects.order_by('-id').first()
+            if last_rule and last_rule.rule_code:
+                try:
+                    last_code = last_rule.rule_code
+                    next_num = ord(last_code[-1]) + 1
+                    self.rule_code = chr(next_num)
+                except (ValueError, IndexError):
+                    self.rule_code = 'A'
+            else:
+                self.rule_code = 'A'
+        super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.get_categoryType_display()} >= {self.minCost} / {self.minUsefulLifeMonths}m"
+        return f"Rule {self.rule_code}: {self.get_categoryType_display()} >= {self.minCost} / {self.minUsefulLifeMonths}m"
+
+
+class CapitalizationSetting(models.Model):
+    """
+    Global capitalization settings — thresholds, defaults, and asset classes.
+    Values are pulled from this singleton settings table by the rule engine.
+    """
+    id = models.BigAutoField(primary_key=True)
+    threshold = models.DecimalField(
+        max_digits=12, decimal_places=2, default=50000,
+        help_text="Default capitalization threshold in KES"
+    )
+    bulk_materiality = models.DecimalField(
+        max_digits=12, decimal_places=2, default=100000,
+        help_text="Bulk/grouped materiality threshold in KES"
+    )
+    min_useful_life = models.IntegerField(
+        default=12,
+        help_text="Default minimum useful life in months for capitalization"
+    )
+    depreciation_start_rule = models.CharField(
+        max_length=30, default='month_after_acquisition',
+        choices=[
+            ('date_of_acquisition', 'Date of Acquisition'),
+            ('month_after_acquisition', 'Month After Acquisition'),
+            ('quarter_after_acquisition', 'Quarter After Acquisition'),
+        ],
+        help_text="When depreciation begins"
+    )
+    default_residual_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, default=10.00,
+        help_text="Default residual value as percentage of cost"
+    )
+    asset_classes = models.JSONField(
+        default=list, blank=True,
+        help_text="List of asset class definitions as JSON"
+    )
+    updated_by = models.CharField(max_length=255, blank=True, default='')
+    createdAt = models.DateTimeField(auto_now_add=True)
+    updatedAt = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'stores_capitalization_setting'
+        verbose_name = 'Capitalization Setting'
+        verbose_name_plural = 'Capitalization Settings'
+
+    def __str__(self):
+        return f"Cap Settings: threshold={self.threshold}, bulk={self.bulk_materiality}"
+
+
+class CapitalizationPrompt(models.Model):
+    """
+    Audit log for capitalization override decisions.
+    Every auto-suggestion, user override, and approval is recorded here.
+    """
+    id = models.CharField(max_length=50, primary_key=True, blank=True)
+    transaction = models.ForeignKey(
+        S2Transaction, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='capitalization_prompts'
+    )
+    item = models.ForeignKey(
+        InventoryItem, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='capitalization_prompts'
+    )
+    item_code = models.CharField(max_length=100, blank=True, default='')
+    item_name = models.CharField(max_length=255, blank=True, default='')
+    category_type = models.CharField(
+        max_length=20, choices=ItemTypeChoices.choices, blank=True, default=''
+    )
+    unit_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    quantity = models.IntegerField(default=1)
+    total_value = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    # Rule evaluation results
+    applied_rule = models.CharField(max_length=10, blank=True, default='')
+    suggested_action = models.CharField(
+        max_length=30, blank=True, default='',
+        choices=[
+            ('expense', 'Expense Immediately'),
+            ('capitalize', 'Capitalize as Asset'),
+            ('bulk_capitalize', 'Bulk/Grouped Capitalize'),
+            ('prompt', 'Awaiting Decision'),
+        ],
+    )
+    suggested_category_type = models.CharField(
+        max_length=20, blank=True, default='',
+        help_text="Auto-suggested category type"
+    )
+
+    # Override workflow
+    override_decision = models.CharField(
+        max_length=30, blank=True, default='',
+        choices=[
+            ('', 'No Override'),
+            ('expense', 'Override → Expense'),
+            ('capitalize', 'Override → Capitalize'),
+            ('reclassify', 'Override → Reclassify'),
+        ],
+    )
+    override_reason = models.TextField(blank=True, default='')
+    override_by = models.CharField(max_length=255, blank=True, default='')
+    override_at = models.DateTimeField(null=True, blank=True)
+
+    # Approval
+    approval_status = models.CharField(
+        max_length=20, default='auto',
+        choices=[
+            ('auto', 'Auto-Approved (Rule Match)'),
+            ('pending', 'Pending Approval'),
+            ('approved', 'Approved'),
+            ('rejected', 'Rejected'),
+        ],
+    )
+    approved_by = models.CharField(max_length=255, blank=True, default='')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    approval_notes = models.TextField(blank=True, default='')
+
+    is_bulk = models.BooleanField(default=False, help_text="Flag for bulk/grouped items")
+    bulk_group_ref = models.CharField(
+        max_length=100, blank=True, default='',
+        help_text="Reference grouping bulk items together"
+    )
+
+    created_by = models.CharField(max_length=255, blank=True, default='')
+    createdAt = models.DateTimeField(auto_now_add=True)
+    updatedAt = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'stores_capitalization_prompt'
+        verbose_name = 'Capitalization Prompt'
+        verbose_name_plural = 'Capitalization Prompts'
+        ordering = ['-createdAt']
+
+    def save(self, *args, **kwargs):
+        if not self.id:
+            from django.utils import timezone
+            year = timezone.now().year
+            last_prompt = CapitalizationPrompt.objects.filter(
+                id__startswith=f'CAP-{year}-'
+            ).order_by('-id').first()
+            if last_prompt:
+                try:
+                    last_num = int(last_prompt.id.split('-')[-1])
+                    self.id = f'CAP-{year}-{last_num + 1:05d}'
+                except (ValueError, IndexError):
+                    self.id = f'CAP-{year}-00001'
+            else:
+                self.id = f'CAP-{year}-00001'
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.id} ({self.item_code}) -> {self.suggested_action}"
 
 
 class LsoRecord(models.Model):

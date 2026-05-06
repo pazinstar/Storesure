@@ -672,3 +672,148 @@ class S2ReversalSerializer(serializers.Serializer):
         reason = validated_data.pop('reason')
         reversed_by = validated_data.pop('reversed_by', '')
         return reverse_s2_transaction(txn, reversed_by=reversed_by, reason=reason)
+
+
+# =============================================================================
+# Phase 3 — Capitalization Rules Engine & Decision Assistant Serializers
+# =============================================================================
+
+from .models import CapitalizationRule, CapitalizationSetting, CapitalizationPrompt
+from .capitalization_engine import classify_item, log_classification_prompt, apply_override
+
+
+class CapitalizationRuleSerializer(serializers.ModelSerializer):
+    """Serializer for CRUD on capitalization rules."""
+    category_type_display = serializers.CharField(
+        source='get_categoryType_display', read_only=True
+    )
+    action_display = serializers.CharField(
+        source='get_action_display', read_only=True
+    )
+
+    class Meta:
+        model = CapitalizationRule
+        fields = [
+            'id', 'rule_code', 'categoryType', 'category_type_display',
+            'rule_label', 'minCost', 'minUsefulLifeMonths',
+            'bulkThreshold', 'bulkMateriality', 'action', 'action_display',
+            'description', 'priority', 'isActive', 'createdAt',
+        ]
+        read_only_fields = ['id', 'rule_code', 'createdAt']
+
+
+class CapitalizationSettingSerializer(serializers.ModelSerializer):
+    """Serializer for reading/updating global capitalization settings."""
+    class Meta:
+        model = CapitalizationSetting
+        fields = [
+            'id', 'threshold', 'bulk_materiality', 'min_useful_life',
+            'depreciation_start_rule', 'default_residual_pct',
+            'asset_classes', 'updated_by', 'createdAt', 'updatedAt',
+        ]
+        read_only_fields = ['id', 'createdAt', 'updatedAt']
+
+
+class CapitalizationPromptListSerializer(serializers.ModelSerializer):
+    """Lightweight list serializer for capitalization prompts."""
+    suggested_action_display = serializers.CharField(
+        source='get_suggested_action_display', read_only=True
+    )
+    approval_status_display = serializers.CharField(
+        source='get_approval_status_display', read_only=True
+    )
+
+    class Meta:
+        model = CapitalizationPrompt
+        fields = [
+            'id', 'item_code', 'item_name', 'category_type',
+            'unit_cost', 'quantity', 'total_value',
+            'applied_rule', 'suggested_action', 'suggested_action_display',
+            'suggested_category_type', 'is_bulk', 'approval_status',
+            'approval_status_display', 'override_required',
+            'created_by', 'createdAt',
+        ]
+        read_only_fields = fields
+
+
+class CapitalizationPromptDetailSerializer(serializers.ModelSerializer):
+    """Full detail serializer for a capitalization prompt with override support."""
+    suggested_action_display = serializers.CharField(
+        source='get_suggested_action_display', read_only=True
+    )
+    approval_status_display = serializers.CharField(
+        source='get_approval_status_display', read_only=True
+    )
+
+    class Meta:
+        model = CapitalizationPrompt
+        fields = '__all__'
+        read_only_fields = [
+            'id', 'item_code', 'item_name', 'category_type',
+            'unit_cost', 'quantity', 'total_value',
+            'applied_rule', 'suggested_action', 'suggested_category_type',
+            'is_bulk', 'bulk_group_ref', 'created_by', 'createdAt', 'updatedAt',
+        ]
+
+
+class ClassifyItemSerializer(serializers.Serializer):
+    """Serializer for triggering auto-classification on an item/GRN."""
+    item_id = serializers.CharField(required=True)
+    qty = serializers.IntegerField(min_value=1, default=1)
+    unit_cost = serializers.DecimalField(
+        required=True, max_digits=12, decimal_places=2, min_value=0
+    )
+    created_by = serializers.CharField(required=False, allow_blank=True, default='')
+
+    def validate_item_id(self, value):
+        try:
+            item = InventoryItem.objects.get(id=value)
+        except InventoryItem.DoesNotExist:
+            raise ValidationError(f"Item with id '{value}' not found.")
+        return item
+
+    def create(self, validated_data):
+        item = validated_data.pop('item_id')
+        qty = validated_data.pop('qty')
+        unit_cost = validated_data.pop('unit_cost')
+        created_by = validated_data.pop('created_by', '')
+
+        result = classify_item(item, qty=qty, unit_cost=unit_cost, created_by=created_by)
+        prompt = log_classification_prompt(
+            item=item, qty=qty, unit_cost=unit_cost,
+            classification=result, created_by=created_by,
+        )
+        return {
+            'prompt': prompt,
+            'classification': result,
+        }
+
+
+class OverrideDecisionSerializer(serializers.Serializer):
+    """Serializer for applying a user override on a capitalization prompt."""
+    prompt_id = serializers.CharField(required=True)
+    override_decision = serializers.ChoiceField(
+        required=True,
+        choices=['expense', 'capitalize', 'reclassify'],
+    )
+    reason = serializers.CharField(required=True, allow_blank=False)
+    override_by = serializers.CharField(required=True, allow_blank=False)
+    approval_status = serializers.ChoiceField(
+        required=False, default='approved',
+        choices=['approved', 'rejected', 'pending'],
+    )
+    approved_by = serializers.CharField(required=False, allow_blank=True, default='')
+    approval_notes = serializers.CharField(required=False, allow_blank=True, default='')
+
+    def validate_prompt_id(self, value):
+        try:
+            prompt = CapitalizationPrompt.objects.get(id=value)
+        except CapitalizationPrompt.DoesNotExist:
+            raise ValidationError(f"Prompt with id '{value}' not found.")
+        if prompt.approval_status == 'approved':
+            raise ValidationError("Prompt has already been approved.")
+        return value
+
+    def create(self, validated_data):
+        prompt_id = validated_data.pop('prompt_id')
+        return apply_override(prompt_id=prompt_id, **validated_data)

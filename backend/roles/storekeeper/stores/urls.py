@@ -57,6 +57,14 @@ from .views import (
     S2ReturnView,
     S2DamageView,
     S2ReversalView,
+    CapitalizationRuleListView,
+    CapitalizationRuleDetailView,
+    CapitalizationSettingView,
+    CapitalizationPromptListView,
+    CapitalizationPromptDetailView,
+    ClassifyItemView,
+    OverrideDecisionView,
+    CapitalizationPendingPromptsView,
 )
 
 urlpatterns = [
@@ -126,4 +134,14 @@ urlpatterns = [
     path('s2/return/', S2ReturnView.as_view(), name='storekeeper-s2-return'),
     path('s2/damage/', S2DamageView.as_view(), name='storekeeper-s2-damage'),
     path('s2/reverse/', S2ReversalView.as_view(), name='storekeeper-s2-reverse'),
+
+    # Phase 3 — Capitalization Rules Engine & Decision Assistant
+    path('capitalization/rules/', CapitalizationRuleListView.as_view(), name='storekeeper-cap-rules'),
+    path('capitalization/rules/<int:id>/', CapitalizationRuleDetailView.as_view(), name='storekeeper-cap-rules-detail'),
+    path('capitalization/settings/', CapitalizationSettingView.as_view(), name='storekeeper-cap-settings'),
+    path('capitalization/prompts/', CapitalizationPromptListView.as_view(), name='storekeeper-cap-prompts'),
+    path('capitalization/prompts/pending/', CapitalizationPendingPromptsView.as_view(), name='storekeeper-cap-prompts-pending'),
+    path('capitalization/prompts/<str:id>/', CapitalizationPromptDetailView.as_view(), name='storekeeper-cap-prompts-detail'),
+    path('capitalization/classify/', ClassifyItemView.as_view(), name='storekeeper-cap-classify'),
+    path('capitalization/override/', OverrideDecisionView.as_view(), name='storekeeper-cap-override'),
 ]
