@@ -1408,6 +1408,64 @@ class CapitalizationPendingPromptsView(APIView):
         })
 
 
+class OverrideApprovalView(APIView):
+    """POST /capitalization/prompts/<prompt_id>/approve/ — approve or reject an override request."""
+    def post(self, request, prompt_id, *args, **kwargs):
+        from rest_framework import status
+        from .serializers import DisposalApprovalSerializer
+        try:
+            prompt = CapitalizationPrompt.objects.get(id=prompt_id)
+        except CapitalizationPrompt.DoesNotExist:
+            return Response({'error': 'prompt not found'}, status=404)
+
+        serializer = DisposalApprovalSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        data = serializer.validated_data
+        # permission: approver required
+        user = request.user
+        is_approver = False
+        try:
+            if user.is_staff or user.is_superuser:
+                is_approver = True
+            else:
+                is_approver = user.groups.filter(name='AssetApprover').exists()
+        except Exception:
+            is_approver = False
+        if not is_approver:
+            return Response({'detail': 'Forbidden - approver role required'}, status=403)
+
+        # If approving a capitalization override that will capitalize, require supporting attachments
+        if prompt.override_decision == 'capitalize':
+            try:
+                from common.messaging.models import DocumentAttachment
+                attached = DocumentAttachment.objects.filter(entity_type__iexact='capitalization_prompt', entity_id=str(prompt.id)).exists()
+                if not attached:
+                    return Response({'error': 'Supporting attachments required for capitalization approval. Attach at least one document.'}, status=400)
+            except Exception:
+                # if attachments subsystem missing, do not block but warn
+                pass
+
+        # apply approval
+        prompt.approval_status = data.get('approval_status')
+        prompt.approved_by = data.get('approved_by')
+        from django.utils import timezone
+        prompt.approved_at = timezone.now()
+        prompt.approval_notes = data.get('committee_reference') or data.get('approval_notes', '')
+        prompt.save()
+
+        # If approved and decision is 'capitalize', mark item category if needed
+        if prompt.approval_status == 'approved' and prompt.override_decision == 'capitalize' and prompt.item:
+            try:
+                prompt.item.category_type = ItemTypeChoices.FIXED_ASSET
+                prompt.item.save(update_fields=['category_type'])
+            except Exception:
+                pass
+
+        return Response(CapitalizationPromptDetailSerializer(prompt).data, status=200)
+
+
 class BulkCapitalizationCreateView(APIView):
     """
     POST /capitalization/bulk/ — Create grouped capitalization prompts for a list of items.

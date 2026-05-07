@@ -406,3 +406,55 @@ class CapSerializerTests(TestCase):
         }
         serializer = OverrideDecisionSerializer(data=data)
         self.assertFalse(serializer.is_valid())
+
+
+class ApprovalEndpointTests(TestCase):
+    """Tests for the OverrideApprovalView endpoint."""
+
+    def setUp(self):
+        from django.contrib.auth.models import User, Group
+        self.user = User.objects.create_user(username='approver', password='pass')
+        self.user.is_staff = True
+        self.user.save()
+
+    def test_approve_requires_attachment_for_capitalize(self):
+        # create item and prompt
+        item = InventoryItem.objects.create(
+            name='Approve Item', category='Test',
+            category_type='consumable', assetType='General',
+            unit='Unit', status='Active', location='Store',
+        )
+        result = classify_item(item, qty=1, unit_cost=Decimal('100'))
+        prompt = log_classification_prompt(item=item, qty=1, unit_cost=Decimal('100'), classification=result, created_by='Tester')
+        # set override decision to capitalize and pending status
+        prompt.override_decision = 'capitalize'
+        prompt.approval_status = 'pending'
+        prompt.save()
+
+        self.client.force_login(self.user)
+        url = f'/api/v1/storekeeper/stores/capitalization/prompts/{prompt.id}/approve/'
+        resp = self.client.post(url, data={'approval_status': 'approved', 'approved_by': 'approver'}, content_type='application/json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_approve_with_attachment_succeeds(self):
+        item = InventoryItem.objects.create(
+            name='Approve Item 2', category='Test',
+            category_type='consumable', assetType='General',
+            unit='Unit', status='Active', location='Store',
+        )
+        result = classify_item(item, qty=1, unit_cost=Decimal('100'))
+        prompt = log_classification_prompt(item=item, qty=1, unit_cost=Decimal('100'), classification=result, created_by='Tester')
+        prompt.override_decision = 'capitalize'
+        prompt.approval_status = 'pending'
+        prompt.save()
+
+        # create attachment record
+        from common.messaging.models import DocumentAttachment
+        DocumentAttachment.objects.create(entity_type='capitalization_prompt', entity_id=str(prompt.id), file_path='x.pdf', uploaded_by='approver')
+
+        self.client.force_login(self.user)
+        url = f'/api/v1/storekeeper/stores/capitalization/prompts/{prompt.id}/approve/'
+        resp = self.client.post(url, data={'approval_status': 'approved', 'approved_by': 'approver'}, content_type='application/json')
+        self.assertEqual(resp.status_code, 200)
+        prompt.refresh_from_db()
+        self.assertEqual(prompt.approval_status, 'approved')

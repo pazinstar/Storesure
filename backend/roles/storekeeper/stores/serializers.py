@@ -874,7 +874,7 @@ class OverrideDecisionSerializer(serializers.Serializer):
     reason = serializers.CharField(required=True, allow_blank=False)
     override_by = serializers.CharField(required=True, allow_blank=False)
     approval_status = serializers.ChoiceField(
-        required=False, default='approved',
+        required=False, default='pending',
         choices=['approved', 'rejected', 'pending'],
     )
     approved_by = serializers.CharField(required=False, allow_blank=True, default='')

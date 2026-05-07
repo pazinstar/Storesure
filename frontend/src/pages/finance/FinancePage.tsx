@@ -19,6 +19,7 @@ import FinAssetsAssetRegister from "./assets/AssetRegister";
 import FinAssetsAdditions from "./assets/Additions";
 import FinAssetsDepreciationRun from "./assets/DepreciationRun";
 import FinAssetsDisposals from "./assets/Disposals";
+import FinAssetsApprovals from "./assets/Approvals";
 import FinGLCashGeneralLedger from "./gl-cash/GeneralLedger";
 import FinGLCashCashBank from "./gl-cash/CashBank";
 import FinGLCashBankReconciliation from "./gl-cash/BankReconciliation";
@@ -82,6 +83,7 @@ const sections: Record<string, { label: string; tabs: { value: string; label: st
       { value: "asset-register", label: "Asset Register", content: <FinAssetsAssetRegister /> },
       { value: "additions", label: "Additions", content: <FinAssetsAdditions /> },
       { value: "depreciation-run", label: "Depreciation Run", content: <FinAssetsDepreciationRun /> },
+      { value: "approvals", label: "Approvals", content: <FinAssetsApprovals /> },
       { value: "disposals", label: "Disposals", content: <FinAssetsDisposals /> },
     ],
   },

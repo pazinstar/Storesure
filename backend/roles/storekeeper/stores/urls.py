@@ -66,6 +66,7 @@ from .views import (
     CapitalizationPromptDetailView,
     ClassifyItemView,
     OverrideDecisionView,
+    OverrideApprovalView,
     CapitalizationPendingPromptsView,
     BulkCapitalizationCreateView,
     BulkCapitalizationProcessView,
@@ -164,6 +165,7 @@ urlpatterns = [
     path('capitalization/prompts/<str:id>/', CapitalizationPromptDetailView.as_view(), name='storekeeper-cap-prompts-detail'),
     path('capitalization/classify/', ClassifyItemView.as_view(), name='storekeeper-cap-classify'),
     path('capitalization/override/', OverrideDecisionView.as_view(), name='storekeeper-cap-override'),
+    path('capitalization/prompts/<str:prompt_id>/approve/', OverrideApprovalView.as_view(), name='storekeeper-cap-override-approve'),
     path('capitalization/bulk/', BulkCapitalizationCreateView.as_view(), name='storekeeper-cap-bulk'),
     path('capitalization/bulk/process/', BulkCapitalizationProcessView.as_view(), name='storekeeper-cap-bulk-process'),
 
