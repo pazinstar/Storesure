@@ -52,8 +52,9 @@ import { ItemCombobox, StoreItem } from "@/components/stores/ItemCombobox";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNotifications } from "@/contexts/NotificationContext";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
+import requisitionsApi from "@/services/requisitions.service";
 
 const departments = [
   "Administration",
@@ -103,6 +104,10 @@ export default function S12Requisition() {
   const [issueDialogOpen, setIssueDialogOpen] = useState(false);
   const [selectedRequisition, setSelectedRequisition] = useState<S12RequisitionType | null>(null);
   const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false);
+  const [approveLoading, setApproveLoading] = useState(false);
+  const [rejectLoading, setRejectLoading] = useState(false);
+
+  const queryClient = useQueryClient();
 
   // Form state
   const [formData, setFormData] = useState({
@@ -169,26 +174,37 @@ export default function S12Requisition() {
 
   const handleApprove = () => {
     if (!selectedRequisition) return;
-
     const quantities: Record<string, number> = {};
     selectedRequisition.items.forEach((item) => {
       quantities[item.id] = approvedQuantities[item.id] ?? item.quantityRequested;
     });
 
-    approveRequisition(
-      selectedRequisition.id,
-      "Current User",
-      approvalRemarks,
-      quantities
-    );
-
-    logStoresAction("UPDATE", `Approved S12 ${selectedRequisition.s12Number}`);
-
-    toast.success("Requisition approved");
-    addNotification({ title: "S12 Requisition Approved", message: `${selectedRequisition.s12Number} approved for ${selectedRequisition.requestingDepartment}`, type: "success", link: "/stores/s12" });
-    setApproveDialogOpen(false);
-    setApprovalRemarks("");
-    setApprovedQuantities({});
+    // optimistic UI: show loading state while request in-flight
+    setApproveLoading(true);
+    // Call backend approval endpoint
+    requisitionsApi
+      .approveRequisition(selectedRequisition.id, {
+        approver: user?.username || user?.name || "Current User",
+        level: 1,
+        decision: "approved",
+        comments: approvalRemarks,
+        items: Object.keys(quantities).map((k) => ({ requisition_item_id: k, approved_qty: quantities[k], decision: quantities[k] > 0 ? 'approved' : 'rejected' })),
+      })
+      .then((res) => {
+        logStoresAction("UPDATE", `Approved S12 ${selectedRequisition.s12Number}`);
+        toast.success("Requisition approved");
+        addNotification({ title: "S12 Requisition Approved", message: `${selectedRequisition.s12Number} approved for ${selectedRequisition.requestingDepartment}`, type: "success", link: "/stores/s12" });
+        setApproveDialogOpen(false);
+        setApprovalRemarks("");
+        setApprovedQuantities({});
+        queryClient.invalidateQueries({ queryKey: ['s12-requisitions'] });
+        setApproveLoading(false);
+      })
+      .catch((err) => {
+        console.error(err);
+        toast.error(err?.response?.data?.error || 'Approval failed');
+        setApproveLoading(false);
+      });
   };
 
   const handleReject = () => {
@@ -196,15 +212,26 @@ export default function S12Requisition() {
       toast.error("Please provide rejection remarks");
       return;
     }
-
-    rejectRequisition(selectedRequisition.id, "Current User", approvalRemarks);
-
-    logStoresAction("UPDATE", `Rejected S12 ${selectedRequisition.s12Number}`);
-
-    toast.success("Requisition rejected");
-    addNotification({ title: "S12 Requisition Rejected", message: `${selectedRequisition.s12Number} rejected — ${approvalRemarks}`, type: "error", link: "/stores/s12" });
-    setApproveDialogOpen(false);
-    setApprovalRemarks("");
+    setRejectLoading(true);
+    requisitionsApi.approveRequisition(selectedRequisition.id, {
+      approver: user?.username || user?.name || "Current User",
+      level: 1,
+      decision: "rejected",
+      comments: approvalRemarks,
+      items: selectedRequisition.items.map((it) => ({ requisition_item_id: it.id, approved_qty: 0, decision: 'rejected' })),
+    }).then(() => {
+      logStoresAction("UPDATE", `Rejected S12 ${selectedRequisition.s12Number}`);
+      toast.success("Requisition rejected");
+      addNotification({ title: "S12 Requisition Rejected", message: `${selectedRequisition.s12Number} rejected — ${approvalRemarks}`, type: "error", link: "/stores/s12" });
+      setApproveDialogOpen(false);
+      setApprovalRemarks("");
+      queryClient.invalidateQueries({ queryKey: ['s12-requisitions'] });
+      setRejectLoading(false);
+    }).catch((err) => {
+      console.error(err);
+      toast.error(err?.response?.data?.error || 'Reject failed');
+      setRejectLoading(false);
+    });
   };
 
   const handleIssue = () => {
@@ -775,6 +802,33 @@ export default function S12Requisition() {
                 </TableBody>
               </Table>
 
+              <div className="pt-4">
+                <Label className="text-muted-foreground">Approval History</Label>
+                {selectedRequisition.approvals && selectedRequisition.approvals.length > 0 ? (
+                  <div className="space-y-2 mt-2">
+                    {selectedRequisition.approvals.map((ap: any) => (
+                      <Card key={ap.id}>
+                        <CardContent className="p-3">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="font-medium">{ap.approver} (Level {ap.level})</div>
+                              <div className="text-sm text-muted-foreground">{ap.decision} — {ap.createdAt ? new Date(ap.createdAt).toLocaleString() : ''}</div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-sm">Items:</div>
+                              <div className="text-xs text-muted-foreground">{ap.items?.map((i: any) => `${i.requisition_item_id}:${i.approved_qty}`).join(', ')}</div>
+                            </div>
+                          </div>
+                          {ap.comments && <div className="mt-2 text-sm">{ap.comments}</div>}
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground mt-2">No approvals yet</p>
+                )}
+              </div>
+
               <div className="flex gap-4 pt-4 border-t">
                 <div className="flex items-center gap-2">
                   {selectedRequisition.issuerSignature ? (
@@ -885,14 +939,14 @@ export default function S12Requisition() {
               </div>
             </div>
           )}
-          <DialogFooter>
-            <Button variant="destructive" onClick={handleReject}>
+            <DialogFooter>
+            <Button variant="destructive" onClick={handleReject} disabled={rejectLoading}>
               <XCircle className="mr-2 h-4 w-4" />
-              Reject
+              {rejectLoading ? 'Rejecting…' : 'Reject'}
             </Button>
-            <Button onClick={handleApprove}>
+            <Button onClick={handleApprove} disabled={approveLoading}>
               <CheckCircle className="mr-2 h-4 w-4" />
-              Approve
+              {approveLoading ? 'Approving…' : 'Approve'}
             </Button>
           </DialogFooter>
         </DialogContent>

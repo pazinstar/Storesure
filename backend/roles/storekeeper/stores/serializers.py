@@ -107,6 +107,7 @@ class RequisitionSerializer(serializers.ModelSerializer):
 
 class S12RequisitionSerializer(serializers.ModelSerializer):
     items = RequisitionItemSerializer(many=True, required=False)
+    approvals = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Requisition
@@ -150,6 +151,35 @@ class S12RequisitionSerializer(serializers.ModelSerializer):
                     else:
                         RequisitionItem.objects.create(requisition=instance, **item_data)
         return instance
+
+    def get_approvals(self, obj):
+        try:
+            from .models import RequisitionApproval
+            approvals = RequisitionApproval.objects.filter(requisition=obj).order_by('-createdAt')
+            return RequisitionApprovalSerializer(approvals, many=True).data
+        except Exception:
+            return []
+
+
+class RequisitionApprovalSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    approver = serializers.CharField()
+    level = serializers.IntegerField()
+    decision = serializers.CharField()
+    comments = serializers.CharField(allow_blank=True)
+    items = serializers.JSONField()
+    createdAt = serializers.CharField(allow_null=True)
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'approver': instance.approver,
+            'level': instance.level,
+            'decision': instance.decision,
+            'comments': instance.comments,
+            'items': instance.items,
+            'createdAt': instance.createdAt.isoformat() if instance.createdAt else None,
+        }
 
 
 class IssueHistorySerializer(serializers.ModelSerializer):

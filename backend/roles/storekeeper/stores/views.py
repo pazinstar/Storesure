@@ -583,6 +583,11 @@ class S12RequisitionDetailView(generics.RetrieveUpdateDestroyAPIView):
 
                         ledger.totalIssuesQty += qty
                         ledger.totalIssuesValue += total_cost
+                        # reduce committedQty when issuing from approved/committed stock
+                        try:
+                            ledger.committedQty = max(0, ledger.committedQty - qty)
+                        except Exception:
+                            pass
                         ledger.closingQty = new_balance
                         ledger.closingValue -= total_cost
                         ledger.save()
@@ -618,6 +623,124 @@ from .models import (
     InventoryLedger,
     StoreReport
 )
+
+
+class RequisitionApprovalView(APIView):
+    """POST /requisitions/<id>/approve/ - apply approvals per-line and capture approver metadata
+
+    Expected payload:
+    {
+      "approver": "Name",
+      "level": 1,
+      "decision": "approved|partially_approved|rejected|returned",
+      "comments": "...",
+      "items": [{"requisition_item_id": "<id>", "approved_qty": 3, "decision": "approved|rejected"}, ...]
+    }
+    """
+    def post(self, request, id):
+        from .models import Requisition, RequisitionItem, InventoryLedger, RequisitionApproval
+        from django.utils import timezone
+        from rest_framework import status
+
+        try:
+            req = Requisition.objects.select_related().prefetch_related('items').get(id=id)
+        except Requisition.DoesNotExist:
+            return Response({'error': 'Requisition not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        data = request.data or {}
+        approver = data.get('approver') or getattr(request, 'user', None) and getattr(request.user, 'username', '') or 'system'
+        level = int(data.get('level') or 1)
+        decision = data.get('decision') or 'partially_approved'
+        comments = data.get('comments') or ''
+        items_payload = data.get('items') or []
+
+        # process each item: set quantityApproved and reserve stock (committedQty)
+        with transaction.atomic():
+            processed = []
+            for it in items_payload:
+                rid = it.get('requisition_item_id')
+                approved_qty = int(it.get('approved_qty') or 0)
+                item_decision = it.get('decision') or ('approved' if approved_qty>0 else 'rejected')
+                req_item = RequisitionItem.objects.select_for_update().filter(id=rid, requisition=req).first()
+                if not req_item:
+                    continue
+
+                # Validate available stock before reserving
+                ledger = InventoryLedger.objects.select_for_update().filter(itemCode=req_item.itemCode.id).first()
+                available = None
+                if ledger:
+                    try:
+                        available = ledger.closingQty - ledger.committedQty
+                    except Exception:
+                        available = ledger.closingQty
+
+                if approved_qty > 0:
+                    if ledger and available is not None and approved_qty > available:
+                        return Response({'error': f'Not enough available stock for {req_item.itemCode.name}. Available: {available}, requested approve: {approved_qty}'}, status=400)
+
+                    # set approved qty and commit stock
+                    req_item.quantityApproved = approved_qty
+                    req_item.save()
+
+                    if ledger:
+                        ledger.committedQty += approved_qty
+                        ledger.save()
+                else:
+                    # mark as rejected/zero approved
+                    req_item.quantityApproved = 0
+                    req_item.save()
+
+                processed.append({'requisition_item_id': req_item.id, 'approved_qty': req_item.quantityApproved, 'decision': item_decision})
+
+            # Create approval record
+            approval = RequisitionApproval.objects.create(
+                requisition=req,
+                approver=approver,
+                level=level,
+                decision=decision,
+                comments=comments,
+                items=processed,
+            )
+
+            # Update requisition overall status based on decisions
+            total_requested = sum((ri.quantityRequested or 0) for ri in req.items.all())
+            total_approved = sum((ri.quantityApproved or 0) for ri in req.items.all())
+            if total_approved == 0:
+                req.status = 'Rejected'
+            elif total_approved < total_requested:
+                req.status = 'Partially Approved'
+            else:
+                req.status = 'Approved'
+            req.approval_level = max(req.approval_level or 0, level)
+            req.save()
+
+        return Response({'ok': True, 'approval_id': approval.id, 'status': req.status})
+
+
+class RequisitionApprovalsListView(APIView):
+    """GET /requisitions/<id>/approvals/ - list approvals for a requisition"""
+    def get(self, request, id):
+        from .models import Requisition, RequisitionApproval
+        from rest_framework import status
+        try:
+            req = Requisition.objects.get(id=id)
+        except Requisition.DoesNotExist:
+            return Response({'error': 'Requisition not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        approvals = RequisitionApproval.objects.filter(requisition=req).order_by('-createdAt')
+        # Use serializer-like representation
+        data = []
+        for a in approvals:
+            data.append({
+                'id': a.id,
+                'approver': a.approver,
+                'level': a.level,
+                'decision': a.decision,
+                'comments': a.comments,
+                'items': a.items,
+                'createdAt': a.createdAt.isoformat() if a.createdAt else None,
+            })
+        return Response({'results': data})
 from .serializers import (
     SupplierSerializer,
     PurchaseOrderSerializer,

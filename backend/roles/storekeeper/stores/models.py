@@ -60,6 +60,14 @@ class InventoryItem(models.Model):
                 self.id = 'ITM001'
         super().save(*args, **kwargs)
 
+    def clean(self):
+        """Model-level validation: ensure category_type is one of the allowed ItemTypeChoices."""
+        from django.core.exceptions import ValidationError
+        if not self.category_type or self.category_type not in [c.value for c in ItemTypeChoices]:
+            raise ValidationError({
+                'category_type': f"Invalid item type '{self.category_type}'. Must be one of {[c.value for c in ItemTypeChoices]}."
+            })
+
     @property
     def ledger(self):
         """Return ledger identifier for this item based on its classification."""
@@ -490,6 +498,8 @@ class InventoryLedger(models.Model):
     totalIssuesValue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     closingQty = models.IntegerField(default=0)
     closingValue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    # Quantity that has been reserved/committed for approved requisitions but not yet issued
+    committedQty = models.IntegerField(default=0)
 
     def __str__(self):
         return self.itemCode
@@ -559,6 +569,21 @@ class LedgerIssue(models.Model):
 
     def __str__(self):
         return self.s13No
+
+
+class RequisitionApproval(models.Model):
+    """Records approval actions on a requisition. Stores per-item approvals in `items` JSON."""
+    id = models.BigAutoField(primary_key=True)
+    requisition = models.ForeignKey(Requisition, related_name='approvals', on_delete=models.CASCADE)
+    approver = models.CharField(max_length=255)
+    level = models.IntegerField(default=1)
+    decision = models.CharField(max_length=30)  # approved | partially_approved | rejected | returned
+    comments = models.TextField(blank=True, default='')
+    items = models.JSONField(default=list)  # list of {'requisition_item_id': id, 'approved_qty': n, 'decision': 'approved'/'rejected'}
+    createdAt = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Approval {self.id} for {self.requisition.s12Number} by {self.approver}"
 
 class StoreReport(models.Model):
     id = models.BigAutoField(primary_key=True)
