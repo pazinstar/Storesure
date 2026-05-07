@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
 import { PurchaseRequisition, PurchaseRequisitionStatus } from "@/mock/data";
+import { attachmentsService } from "@/services/attachments.service";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -248,15 +249,15 @@ const Requisitions = () => {
   };
 
   const handleApprove = (req: PurchaseRequisition) => {
-    updateMutation.mutate({
-      id: req.id,
-      updates: {
-        status: "approved" as PurchaseRequisitionStatus,
-        approvedBy: user?.name || "Approver",
-        approvedDate: new Date().toISOString().split('T')[0]
-      }
-    }, {
-      onSuccess: () => {
+    // Use direct API call so we can capture backend validation messages (e.g. missing attachments)
+    const doApprove = async () => {
+      try {
+        setApprovalError("");
+        await procurementService.updatePurchaseRequisition(req.id, {
+          status: "approved" as PurchaseRequisitionStatus,
+          approvedBy: user?.name || "Approver",
+          approvedDate: new Date().toISOString().split('T')[0]
+        });
         addLog("Requisition Approved", "Procurement", `${req.id} - ${req.title}`);
         addNotification({
           title: "Requisition Approved",
@@ -265,9 +266,48 @@ const Requisitions = () => {
           link: "/procurement/requisitions",
         });
         toast.success("Requisition approved successfully");
-      },
-      onError: () => toast.error("Failed to approve requisition")
-    });
+        queryClient.invalidateQueries({ queryKey: ['purchase-requisitions'] });
+      } catch (err: any) {
+        const msg = err?.message || String(err);
+        // If backend indicates attachments required, surface it and allow upload
+        setApprovalError(msg);
+      }
+    };
+
+    doApprove();
+  };
+
+  const [approvalError, setApprovalError] = React.useState<string>("");
+  const [attachmentFile, setAttachmentFile] = React.useState<File | null>(null);
+  const [uploadingAttachment, setUploadingAttachment] = React.useState(false);
+
+  const handleUploadAttachment = async (req: PurchaseRequisition) => {
+    if (!attachmentFile) return toast.error("Please select a file to upload");
+    setUploadingAttachment(true);
+    try {
+      await attachmentsService.uploadAttachment('purchase_requisition', req.id, attachmentFile, 'approval');
+      toast.success('Attachment uploaded');
+      setApprovalError("");
+      // Retry approve
+      await procurementService.updatePurchaseRequisition(req.id, {
+        status: "approved" as PurchaseRequisitionStatus,
+        approvedBy: user?.name || "Approver",
+        approvedDate: new Date().toISOString().split('T')[0]
+      });
+      addLog("Requisition Approved", "Procurement", `${req.id} - ${req.title}`);
+      addNotification({
+        title: "Requisition Approved",
+        message: `${req.id} - ${req.title} has been approved by ${user?.name || "Approver"}`,
+        type: "success",
+        link: "/procurement/requisitions",
+      });
+      toast.success("Requisition approved successfully");
+      queryClient.invalidateQueries({ queryKey: ['purchase-requisitions'] });
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to upload attachment');
+    } finally {
+      setUploadingAttachment(false);
+    }
   };
 
   const handleReject = () => {

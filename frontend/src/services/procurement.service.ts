@@ -98,8 +98,13 @@ export const procurementService = {
             if (!requisition) throw new Error("Not found");
             return { ...requisition, ...updates };
         }
-        const response = await fetch(`${apiConfig.baseUrl}/requisitions/${id}`, { method: "PATCH", body: JSON.stringify(updates) });
-        if (!response.ok) throw new Error("Failed");
+        const response = await fetch(`${apiConfig.baseUrl}/requisitions/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(updates) });
+        if (!response.ok) {
+            let body = {} as any
+            try { body = await response.json(); } catch (e) { /* ignore */ }
+            const msg = body?.error || body?.detail || JSON.stringify(body) || response.statusText;
+            throw new Error(msg);
+        }
         return response.json();
     },
 
@@ -154,7 +159,12 @@ export const procurementService = {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(updates)
         });
-        if (!response.ok) throw new Error("Failed");
+        if (!response.ok) {
+            let body = {} as any
+            try { body = await response.json(); } catch (e) { /* ignore */ }
+            const msg = body?.error || body?.detail || JSON.stringify(body) || response.statusText;
+            throw new Error(msg);
+        }
         return response.json();
     },
 
@@ -191,7 +201,12 @@ export const procurementService = {
             return { ...lpo, ...updates };
         }
         const response = await fetch(`${apiConfig.baseUrl}/procurement/lpos/${id}/`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(updates) });
-        if (!response.ok) throw new Error("Failed");
+        if (!response.ok) {
+            let body = {} as any
+            try { body = await response.json(); } catch (e) { /* ignore */ }
+            const msg = body?.error || body?.detail || JSON.stringify(body) || response.statusText;
+            throw new Error(msg);
+        }
         return response.json();
     },
 
