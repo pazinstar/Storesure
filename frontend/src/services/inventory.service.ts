@@ -458,4 +458,52 @@ export const inventoryService = {
             return response.json();
         }
     }
+,
+
+    async getS11Record(id: string): Promise<S11Record> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            const record = MOCK_S11_RECORDS.find(r => r.id === id);
+            if (!record) throw new Error("Not found");
+            return record;
+        } else {
+            const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/receive/${id}/`);
+            if (!response.ok) throw new Error("Failed to load S11 record");
+            return response.json();
+        }
+    }
+
+,
+
+    async createS2Receipt(payload: any): Promise<any> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            return { ok: true };
+        } else {
+            const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/s2/receipt/`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) throw new Error("Failed to post S2 receipt");
+            return response.json();
+        }
+    }
+
+,
+
+    async createS2Issue(payload: any): Promise<any> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            return { ok: true };
+        } else {
+            const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/s2/issue/`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) throw new Error("Failed to post S2 issue");
+            return response.json();
+        }
+    }
 };

@@ -227,6 +227,28 @@ export default function ReceiveStock() {
       );
       queryClient.invalidateQueries(['s11-stats']);
       toast.success("Status Updated", { description: `${updatedRecord.id} is now ${updatedRecord.status}` });
+      // If a GRN was posted, attempt to post S2 receipts for its items
+      if (updatedRecord.status === "Posted") {
+        (async () => {
+          try {
+            const full = await api.getS11Record(updatedRecord.id);
+            const items: any[] = full.items || [];
+            for (const it of items) {
+              const itemId = it.itemCode || it.item_id || it.id || it.code || it.item || null;
+              const qty = it.qty || it.quantity || it.quantityReceived || it.receivedQty || 0;
+              const unit_cost = it.unitCost || it.unit_cost || it.unitPrice || 0;
+              if (!itemId || qty <= 0) continue;
+              try {
+                await api.createS2Receipt({ item_id: itemId, date: full.date || new Date().toISOString().split('T')[0], qty, unit_cost, supplier_name: full.supplier || full.supplierName || '', ref_no: full.lpoReference || full.reference || full.id, created_by: user?.name || 'system' });
+              } catch (e) {
+                console.warn('S2 receipt post failed for', itemId, e);
+              }
+            }
+          } catch (e) {
+            console.warn('Failed to post S2 receipts for S11', updatedRecord.id, e);
+          }
+        })();
+      }
     },
     onError: () => {
       toast.error("Failed to update GRN status.");

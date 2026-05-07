@@ -13,9 +13,12 @@ from .models import ItemTypeChoices
 VALID_ITEM_TYPES = {choice.value for choice in ItemTypeChoices}
 
 class InventoryItemSerializer(serializers.ModelSerializer):
+    ledger = serializers.SerializerMethodField(read_only=True)
+    is_depreciable = serializers.SerializerMethodField(read_only=True)
+    requires_custodian = serializers.SerializerMethodField(read_only=True)
     class Meta:
         model = InventoryItem
-        fields = '__all__'
+        fields = '__all__'  # plus derived read-only properties
 
     def validate_category_type(self, value):
         """Enforce only the 4 allowed item types and reject custom/unknown values."""
@@ -24,6 +27,35 @@ class InventoryItemSerializer(serializers.ModelSerializer):
                 f"Invalid item type '{value}'. Must be one of: {', '.join(sorted(VALID_ITEM_TYPES))}."
             )
         return value
+
+    def get_ledger(self, obj):
+        try:
+            return obj.ledger
+        except Exception:
+            return None
+
+    def get_is_depreciable(self, obj):
+        try:
+            return obj.is_depreciable
+        except Exception:
+            return False
+
+    def get_requires_custodian(self, obj):
+        try:
+            return obj.requires_custodian
+        except Exception:
+            return False
+
+    def validate(self, data):
+        # Enforce minimum useful life for permanent and fixed assets
+        ct = data.get('category_type') or (self.instance.category_type if self.instance else None)
+        min_life = data.get('min_useful_life') if 'min_useful_life' in data else (self.instance.min_useful_life if self.instance else None)
+        if ct in (ItemTypeChoices.PERMANENT, ItemTypeChoices.FIXED_ASSET):
+            if not min_life or int(min_life) <= 0:
+                raise ValidationError({
+                    'min_useful_life': 'Permanent and Fixed Asset items must set `min_useful_life` (months) > 0.'
+                })
+        return data
 
 class StoreItemSerializer(serializers.ModelSerializer):
     code = serializers.CharField(source='id')

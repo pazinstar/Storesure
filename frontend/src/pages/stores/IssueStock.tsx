@@ -151,6 +151,27 @@ export default function IssueStock() {
       queryClient.invalidateQueries(['s13-records']);
       toast.success("Items issued successfully via API");
       addNotification({ title: "Stock Issued (S13)", message: `${savedRecord.id} — ${savedRecord.department}`, type: "success", link: "/stores/issue" });
+      // After successful S13 creation, post S2 issue transactions for the issued items (best-effort).
+      (async () => {
+        try {
+          if (selectedReq && Object.keys(issuedQuantities).length > 0) {
+            for (const it of selectedReq.items) {
+              const qty = issuedQuantities[it.id] ?? 0;
+              if (!qty || qty <= 0) continue;
+              const itemCode = it.itemCode && typeof it.itemCode === 'string' ? it.itemCode : (it.itemCode?.id || it.itemCode || it.id);
+              const unit_cost = (inventoryItemsMap[itemCode]?.unitCost) || it.unitPrice || 0;
+              try {
+                await api.createS2Issue({ item_id: itemCode, date: savedRecord.date || new Date().toISOString().split('T')[0], qty, unit_cost, custodian_id: '', custodian_name: '', dept_id: savedRecord.department, dept_name: savedRecord.department, ref_no: savedRecord.id, created_by: user?.name || 'system' });
+              } catch (e) {
+                console.warn('S2 issue post failed for', itemCode, e);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to post S2 issues after S13 creation', e);
+        }
+      })();
+
       setIssueDialogOpen(false);
       setSelectedReqId("");
       setIssuedQuantities({});

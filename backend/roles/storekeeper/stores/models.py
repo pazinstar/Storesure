@@ -60,6 +60,46 @@ class InventoryItem(models.Model):
                 self.id = 'ITM001'
         super().save(*args, **kwargs)
 
+    @property
+    def ledger(self):
+        """Return ledger identifier for this item based on its classification."""
+        if self.category_type == ItemTypeChoices.CONSUMABLE:
+            return 'S1'
+        if self.category_type in (ItemTypeChoices.EXPENDABLE, ItemTypeChoices.PERMANENT):
+            return 'S2'
+        if self.category_type == ItemTypeChoices.FIXED_ASSET:
+            return 'FixedAssetRegister'
+        return 'Unknown'
+
+    @property
+    def is_depreciable(self):
+        return self.category_type == ItemTypeChoices.FIXED_ASSET
+
+    @property
+    def requires_custodian(self):
+        return self.category_type in (ItemTypeChoices.EXPENDABLE, ItemTypeChoices.PERMANENT, ItemTypeChoices.FIXED_ASSET)
+
+    def is_capitalizable(self, unit_cost: float = None, quantity: int = 1) -> bool:
+        """Decide whether this item should be capitalized.
+
+        Rules:
+        - All `fixed_asset` items are capitalizable.
+        - `permanent` items are capitalizable when they meet a configurable threshold.
+        - Consumables and expendables are not capitalized.
+        """
+        total = (unit_cost or 0) * (quantity or 1)
+        try:
+            from django.conf import settings
+            threshold = getattr(settings, 'CAPITALIZATION_THRESHOLD', 0)
+        except Exception:
+            threshold = 0
+
+        if self.category_type == ItemTypeChoices.FIXED_ASSET:
+            return True
+        if self.category_type == ItemTypeChoices.PERMANENT:
+            return total >= threshold
+        return False
+
     def __str__(self):
         return f"{self.id} - {self.name}"
 
@@ -1084,18 +1124,24 @@ class S2Transaction(models.Model):
                 'qty_received', 'qty_issued', 'unit_cost', 'total_value',
                 'running_balance_before', 'running_balance_after', 'date', 'ref_no'
             }
+            # Allow certain update-only operations (reversal/status updates) to proceed
+            update_fields = kwargs.get('update_fields')
+            allowed_meta_updates = {'status', 'reversed_by', 'reversal_reason', 'approved_by', 'approved_at'}
             if orig and orig.status == 'posted':
-                # Allow changes only to status/reversal fields via controlled workflows.
-                changed = False
-                for field in protected_fields:
-                    # Map model attr names when necessary
-                    attr = field
-                    if hasattr(orig, attr) and getattr(orig, attr) != getattr(self, attr):
-                        changed = True
-                        break
-                if changed:
-                    from django.core.exceptions import ValidationError
-                    raise ValidationError("Editing posted S2 transactions is not allowed. Use reversal/adjustment workflows.")
+                # If caller specified update_fields and it's only meta fields, allow it.
+                if update_fields and set(update_fields).issubset(allowed_meta_updates):
+                    pass
+                else:
+                    # Otherwise prevent edits to core posting fields.
+                    changed = False
+                    for field in protected_fields:
+                        attr = field
+                        if hasattr(orig, attr) and getattr(orig, attr) != getattr(self, attr):
+                            changed = True
+                            break
+                    if changed:
+                        from django.core.exceptions import ValidationError
+                        raise ValidationError("Editing posted S2 transactions is not allowed. Use reversal/adjustment workflows.")
 
         super().save(*args, **kwargs)
 

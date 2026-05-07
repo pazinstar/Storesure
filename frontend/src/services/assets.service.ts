@@ -142,6 +142,8 @@ export const assetsService = {
         return response.json();
     }
 
+,
+
     async bulkClassify(items: Array<any>): Promise<any> {
         if (apiConfig.useMockData) {
             await delay(SIMULATE_DELAY);
