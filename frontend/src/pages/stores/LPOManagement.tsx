@@ -408,6 +408,13 @@ export default function LPOManagementPage() {
     setPrintData(data);
     setPrintDialogOpen(true);
     logStoresAction("LPO Printed", `${lpo.lpoNumber} printed as ${copyType}`);
+    // Also open server-side printable HTML in a new tab for PDF/WeasyPrint
+    try {
+      const url = `/api/v1/storekeeper/stores/lpos/${lpo.id}/print-html/?copy=${copyType}`;
+      window.open(url, '_blank');
+    } catch (e) {
+      // ignore in test env
+    }
   };
 
   const handleViewLPO = (lpo: LPO) => {

@@ -913,11 +913,113 @@ class LpoDetailView(generics.RetrieveUpdateDestroyAPIView):
         instance = self.get_object()
         # If request aims to set status to Approved and it wasn't Approved before, require attachments
         if status_val and status_val.lower() == 'approved' and (not instance.status or instance.status.lower() != 'approved'):
+            # Require supporting attachments
             has_attachments = DocumentAttachment.objects.filter(entity_type__iexact='purchase_order', entity_id=str(instance.id)).exists()
             if not has_attachments:
                 return Response({'error': 'Supporting attachments required to approve Purchase Order. Attach at least one document.'}, status=status.HTTP_400_BAD_REQUEST)
 
+            # Require financial and procurement fields before approval
+            missing = []
+            required_fields = ['account', 'vote_head', 'procurement_method', 'quotation_ref', 'vat_type', 'valid_until']
+            for f in required_fields:
+                val = getattr(instance, f, None) or serializer.validated_data.get(f)
+                if not val:
+                    missing.append(f)
+
+            if missing:
+                return Response({'error': 'Cannot approve LPO. Missing required fields: %s' % ', '.join(missing)}, status=status.HTTP_400_BAD_REQUEST)
+
         return super().perform_update(serializer)
+
+
+class LpoPrintHtmlView(APIView):
+    """GET /lpos/<id>/print-html/ -- return server-side HTML for printing LPO"""
+    def get(self, request, id, format=None):
+        try:
+            po = PurchaseOrder.objects.get(id=id)
+        except PurchaseOrder.DoesNotExist:
+            return Response({'detail': 'Purchase order not found.'}, status=404)
+
+        # Build a simple HTML representation for printing (frontend templates exist; this is lightweight)
+        items_rows = "".join([
+            f"<tr><td>{it.description}</td><td>{it.unit}</td><td style='text-align:right'>{int(it.quantity)}</td><td style='text-align:right'>{float(it.unitPrice):,.2f}</td><td style='text-align:right'>{float(it.quantity * float(it.unitPrice)):,.2f}</td></tr>"
+            for it in po.items.all() if hasattr(po, 'items')
+        ])
+
+        html = f"""
+        <!doctype html>
+        <html>
+        <head>
+          <meta charset='utf-8'/>
+          <title>{po.lpoNumber} - Print</title>
+          <style>body{{font-family: Arial, sans-serif;}}table{{width:100%;border-collapse:collapse}}td,th{{border:1px solid #000;padding:6px}}</style>
+        </head>
+        <body>
+          <h2>Local Purchase Order (LPO) - {po.lpoNumber}</h2>
+          <p><strong>Supplier:</strong> {po.supplierName} &nbsp; <strong>Date:</strong> {po.date}</p>
+          <p><strong>Account:</strong> {po.account or ''} &nbsp; <strong>Vote Head:</strong> {po.vote_head or ''} &nbsp; <strong>Procurement Method:</strong> {po.procurement_method or ''}</p>
+          <table>
+            <thead><tr><th>Description</th><th>Unit</th><th>Qty</th><th>Unit</th><th>Total</th></tr></thead>
+            <tbody>
+              {items_rows}
+            </tbody>
+          </table>
+          <p style='text-align:right;font-weight:bold'>Total: KES {float(po.totalValue):,.2f}</p>
+        </body>
+        </html>
+        """
+
+        return HttpResponse(html, content_type='text/html')
+
+
+class LsoPrintHtmlView(APIView):
+    """GET /lsos/<id>/print-html/ -- return server-side HTML for printing LSO"""
+    def get(self, request, id, format=None):
+        try:
+            lso = LsoRecord.objects.get(id=id)
+        except LsoRecord.DoesNotExist:
+            return Response({'detail': 'LSO record not found.'}, status=404)
+
+        html = f"""
+        <!doctype html>
+        <html>
+        <head>
+          <meta charset='utf-8'/>
+          <title>{lso.lsoNumber or lso.id} - LSO Print</title>
+          <style>body{{font-family: Arial, sans-serif;}}table{{width:100%;border-collapse:collapse}}td,th{{border:1px solid #000;padding:6px}}</style>
+        </head>
+        <body>
+          <h2>Local Service Order (LSO) - {lso.lsoNumber or lso.id}</h2>
+          <p><strong>Supplier:</strong> {lso.supplierName} &nbsp; <strong>Date:</strong> {lso.createdAt.date() if lso.createdAt else ''}</p>
+          <p><strong>Description:</strong> {lso.description}</p>
+          <p style='text-align:right;font-weight:bold'>Total: KES {float(lso.totalValue):,.2f}</p>
+        </body>
+        </html>
+        """
+
+        return HttpResponse(html, content_type='text/html')
+
+
+class LsoDetailJsonView(APIView):
+    """GET /lsos/<id>/ -- return JSON for LSO record (used by frontend print page)"""
+    def get(self, request, id, format=None):
+        try:
+            lso = LsoRecord.objects.get(id=id)
+        except LsoRecord.DoesNotExist:
+            return Response({'detail': 'LSO record not found.'}, status=404)
+
+        data = {
+            'id': lso.id,
+            'lsoNumber': lso.lsoNumber,
+            'orderType': lso.orderType,
+            'description': lso.description,
+            'supplierName': lso.supplierName,
+            'totalValue': float(lso.totalValue or 0),
+            'status': lso.status,
+            'createdBy': lso.createdBy,
+            'createdAt': lso.createdAt.isoformat() if lso.createdAt else None,
+        }
+        return Response(data)
 
 
 class LpoSendView(APIView):

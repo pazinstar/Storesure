@@ -12,6 +12,13 @@ export interface LPOPrintData {
   expectedDeliveryDate: string;
   paymentTerms: string;
   requisitionRef?: string;
+  account?: string;
+  voteHead?: string;
+  procurementMethod?: string;
+  quotationRef?: string;
+  vatType?: string;
+  vatAmount?: number;
+  validUntil?: string;
   items: Array<{
     description: string;
     unit: string;
@@ -135,6 +142,34 @@ export default function LPOPrintTemplate({ data }: LPOPrintTemplateProps) {
         <div className="flex">
           <span className="font-bold w-36">Payment Terms:</span>
           <span className="border-b border-black flex-1 px-2">{data.paymentTerms}</span>
+        </div>
+      </div>
+
+      {/* Procurement & Financial Classification */}
+      <div className="grid grid-cols-2 gap-4 mb-6 text-sm">
+        <div className="flex">
+          <span className="font-bold w-36">Procurement Method:</span>
+          <span className="border-b border-black flex-1 px-2">{data.procurementMethod || 'N/A'}</span>
+        </div>
+        <div className="flex">
+          <span className="font-bold w-36">Quotation Ref:</span>
+          <span className="border-b border-black flex-1 px-2">{data.quotationRef || 'N/A'}</span>
+        </div>
+        <div className="flex">
+          <span className="font-bold w-36">Account:</span>
+          <span className="border-b border-black flex-1 px-2">{data.account || 'N/A'}</span>
+        </div>
+        <div className="flex">
+          <span className="font-bold w-36">Vote Head:</span>
+          <span className="border-b border-black flex-1 px-2">{data.voteHead || 'N/A'}</span>
+        </div>
+        <div className="flex">
+          <span className="font-bold w-36">VAT:</span>
+          <span className="border-b border-black flex-1 px-2">{data.vatType || 'N/A'} {data.vatAmount ? `• ${Number(data.vatAmount).toLocaleString('en-KE', {minimumFractionDigits:2})}` : ''}</span>
+        </div>
+        <div className="flex">
+          <span className="font-bold w-36">Valid Until:</span>
+          <span className="border-b border-black flex-1 px-2">{data.validUntil || '-'}</span>
         </div>
       </div>
 
