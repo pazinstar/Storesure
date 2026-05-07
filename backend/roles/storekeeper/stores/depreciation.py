@@ -45,24 +45,29 @@ def run_depreciation(run_type: str, year: int, month: int = None, created_by: st
         DepreciationRun = None
         DepreciationSchedule = None
 
+    # Generate compact deterministic run code early so fallback GL checks can detect prior postings
+    # Format: DEPR{R|M|A}{YYYY}{MM} e.g. DEPRM202405
+    rt = (run_type[0].upper() if run_type else 'M')
+    run_code = f'DEPR{rt}{year}{(month or 0):02d}'
+
     # Idempotency: if model exists, ensure no completed run of same period exists
     if DepreciationRun is not None:
         existing = DepreciationRun.objects.filter(run_type=run_type, period_year=year, period_month=month, status='completed').first()
         if existing:
             raise ValueError('Depreciation for this period already completed. Reverse before re-running.')
     else:
-        # Fallback idempotency: if any GL depreciation entries already exist for this period, prevent re-run
+        # Fallback idempotency: if any GL depreciation entries already exist for this run_code, prevent re-run
         try:
             from roles.finance.models import GLEntry
-            # Broad check: any GL voucher with type 'depreciation' indicates work already posted
-            exists = GLEntry.objects.filter(voucher_type__icontains='depreciation').exists()
+        except ImportError:
+            GLEntry = None
+
+        if GLEntry is not None:
+            # Look for any previously posted depreciation entries in the same period
+            exists = GLEntry.objects.filter(voucher_type__iexact='depreciation', posting_date__year=year, posting_date__month=month or 1).exists()
             if exists:
                 raise ValueError('Depreciation for this period already completed (GL postings exist). Reverse before re-running.')
-        except Exception:
-            # If finance app/models not available, skip fallback check
-            pass
 
-    run_code = f'DEPR-{year}-{month or 0}-{int(datetime.utcnow().timestamp())}'
     if DepreciationRun is not None:
         run = DepreciationRun.objects.create(
             run_code=run_code,
@@ -157,7 +162,8 @@ def run_depreciation(run_type: str, year: int, month: int = None, created_by: st
                         expense_acc = ChartOfAccount.objects.get(code=expense_acc_code)
                         accum_acc = ChartOfAccount.objects.get(code=accum_acc_code)
 
-                        voucher_ref = f'DEPR-{asset.assetCode}-{year}-{month or 0}'
+                        # include run code to make GL postings idempotent and traceable
+                        voucher_ref = f'{run.run_code}:{asset.assetCode}:{year}-{month or 0}'
                         lines = [
                             {'account': expense_acc, 'description': f'Depreciation {asset.assetCode}', 'debit': monthly_amount, 'credit': Decimal('0.00')},
                             {'account': accum_acc, 'description': f'Accumulated Depreciation {asset.assetCode}', 'debit': Decimal('0.00'), 'credit': monthly_amount},

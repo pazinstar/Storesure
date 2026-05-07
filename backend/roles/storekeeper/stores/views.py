@@ -518,7 +518,14 @@ class S12RequisitionDetailView(generics.RetrieveUpdateDestroyAPIView):
                 if not existing:
                     should_process = True
 
+        from common.messaging.models import DocumentAttachment
+
         if should_process:
+            # Require supporting attachments for requisition processing (e.g., approvals/issuance)
+            has_attachments = DocumentAttachment.objects.filter(entity_type__iexact='requisition', entity_id=str(updated_instance.id)).exists()
+            if not has_attachments:
+                from rest_framework import status
+                return Response({'error': 'Supporting attachments required for requisition approval/processing. Attach at least one document.'}, status=status.HTTP_400_BAD_REQUEST)
             with transaction.atomic():
                 s13 = IssueHistory.objects.create(
                     date=timezone.now().date(),
@@ -639,6 +646,21 @@ class LpoDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = PurchaseOrder.objects.all()
     serializer_class = PurchaseOrderSerializer
     lookup_field = 'id'
+
+    def perform_update(self, serializer):
+        # Enforce attachments when marking LPO as Approved
+        from common.messaging.models import DocumentAttachment
+        from rest_framework import status
+
+        status_val = serializer.validated_data.get('status')
+        instance = self.get_object()
+        # If request aims to set status to Approved and it wasn't Approved before, require attachments
+        if status_val and status_val.lower() == 'approved' and (not instance.status or instance.status.lower() != 'approved'):
+            has_attachments = DocumentAttachment.objects.filter(entity_type__iexact='purchase_order', entity_id=str(instance.id)).exists()
+            if not has_attachments:
+                return Response({'error': 'Supporting attachments required to approve Purchase Order. Attach at least one document.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        return super().perform_update(serializer)
 
 
 class LpoSendView(APIView):
@@ -771,6 +793,109 @@ class StoreReportExportView(generics.GenericAPIView):
         writer.writerow(['ITM-002', 'Sample Item 2', '50', 'Low Stock'])
         
         return response
+
+
+class IPSASReportListView(APIView):
+    """GET /reports/ipsas/ — list available IPSAS report stubs"""
+    def get(self, request, *args, **kwargs):
+        reports = [
+            {'id': 'fixed_assets_register', 'title': 'Fixed Assets Register'},
+            {'id': 'depreciation_schedule', 'title': 'Depreciation Schedule'},
+            {'id': 'asset_disposals', 'title': 'Asset Disposals'},
+        ]
+        return Response(reports)
+
+
+class IPSASReportExportView(generics.GenericAPIView):
+    """GET /reports/ipsas/<id>/export/ — export IPSAS report as CSV or PDF"""
+    def get(self, request, *args, **kwargs):
+        report_id = kwargs.get('id')
+        fmt = request.query_params.get('format', 'csv').lower()
+
+        if fmt == 'csv':
+            import csv
+            response = HttpResponse(content_type='text/csv')
+            response['Content-Disposition'] = f'attachment; filename="{report_id}.csv"'
+            writer = csv.writer(response)
+
+            if report_id == 'fixed_assets_register':
+                from .models import FixedAsset
+                writer.writerow(['Asset Code', 'Name', 'Category', 'Acquisition Date', 'Cost', 'NBV', 'Status'])
+                for a in FixedAsset.objects.all():
+                    writer.writerow([a.assetCode, a.name, a.category, a.acq_date or '', a.total_cost, a.nbv, a.status])
+                return response
+
+            if report_id == 'depreciation_schedule':
+                # DepreciationSchedule may be absent on some setups; handle gracefully
+                try:
+                    DepreciationSchedule = apps.get_model('stores', 'DepreciationSchedule')
+                except LookupError:
+                    DepreciationSchedule = None
+
+                writer.writerow(['Asset Code', 'Year', 'Month', 'Monthly Depreciation', 'Posted Status'])
+                if DepreciationSchedule is not None:
+                    for s in DepreciationSchedule.objects.all():
+                        writer.writerow([s.asset.assetCode if s.asset else '', s.year, s.month, s.monthly_depreciation, s.posted_status])
+                return response
+
+            if report_id == 'asset_disposals':
+                from .models import DisposalRecord
+                writer.writerow(['Record', 'Method', 'Date', 'Value', 'Notes'])
+                for d in DisposalRecord.objects.all():
+                    writer.writerow([d.id, d.disposalMethod, d.disposalDate, d.value, d.notes])
+                return response
+
+            return Response({'error': 'Unknown IPSAS report id'}, status=400)
+
+        # PDF export — attempt to render HTML and convert to PDF using WeasyPrint
+        if fmt == 'pdf':
+            try:
+                from weasyprint import HTML
+            except Exception:
+                return Response({'error': 'PDF export requires WeasyPrint. Install with `pip install WeasyPrint`.'}, status=501)
+
+            # Build simple HTML for each report type
+            html_parts = ['<html><head><meta charset="utf-8"><title>IPSAS Report</title></head><body>']
+            if report_id == 'fixed_assets_register':
+                html_parts.append('<h1>Fixed Assets Register</h1>')
+                html_parts.append('<table border="1" cellspacing="0" cellpadding="4"><tr><th>Asset Code</th><th>Name</th><th>Category</th><th>Acquisition Date</th><th>Cost</th><th>NBV</th><th>Status</th></tr>')
+                from .models import FixedAsset
+                for a in FixedAsset.objects.all():
+                    html_parts.append(f'<tr><td>{a.assetCode}</td><td>{a.name}</td><td>{a.category}</td><td>{a.acq_date or ""}</td><td>{a.total_cost}</td><td>{a.nbv}</td><td>{a.status}</td></tr>')
+                html_parts.append('</table>')
+
+            elif report_id == 'depreciation_schedule':
+                html_parts.append('<h1>Depreciation Schedule</h1>')
+                try:
+                    DepreciationSchedule = apps.get_model('stores', 'DepreciationSchedule')
+                except LookupError:
+                    DepreciationSchedule = None
+                html_parts.append('<table border="1" cellspacing="0" cellpadding="4"><tr><th>Asset Code</th><th>Year</th><th>Month</th><th>Monthly Depreciation</th><th>Posted</th></tr>')
+                if DepreciationSchedule is not None:
+                    for s in DepreciationSchedule.objects.all():
+                        html_parts.append(f'<tr><td>{s.asset.assetCode if s.asset else ""}</td><td>{s.year}</td><td>{s.month}</td><td>{s.monthly_depreciation}</td><td>{s.posted_status}</td></tr>')
+                html_parts.append('</table>')
+
+            elif report_id == 'asset_disposals':
+                html_parts.append('<h1>Asset Disposals</h1>')
+                from .models import DisposalRecord
+                html_parts.append('<table border="1" cellspacing="0" cellpadding="4"><tr><th>Record</th><th>Method</th><th>Date</th><th>Value</th><th>Notes</th></tr>')
+                for d in DisposalRecord.objects.all():
+                    html_parts.append(f'<tr><td>{d.id}</td><td>{d.disposalMethod}</td><td>{d.disposalDate}</td><td>{d.value}</td><td>{d.notes}</td></tr>')
+                html_parts.append('</table>')
+
+            else:
+                return Response({'error': 'Unknown IPSAS report id'}, status=400)
+
+            html_parts.append('</body></html>')
+            html_content = '\n'.join(html_parts)
+
+            pdf = HTML(string=html_content).write_pdf()
+            response = HttpResponse(pdf, content_type='application/pdf')
+            response['Content-Disposition'] = f'attachment; filename="{report_id}.pdf"'
+            return response
+
+        return Response({'error': 'Unknown format. Use csv or pdf.'}, status=400)
 
 class ConsumablesLedgerListView(generics.ListAPIView):
     queryset = InventoryLedger.objects.all()
@@ -1394,6 +1519,14 @@ class FixedAssetDisposalView(APIView):
             disposal_reason = serializer.validated_data['disposal_reason']
             disposed_qty = serializer.validated_data.get('disposed_qty', None)
             changed_by = serializer.validated_data.get('changed_by', '')
+
+            # Require supporting attachments for any disposal (partial or full)
+            from common.messaging.models import DocumentAttachment
+            has_attachments = DocumentAttachment.objects.filter(
+                entity_type='fixed_asset', entity_id=str(asset.id), is_active=True
+            ).exists()
+            if not has_attachments:
+                return Response({'error': 'Supporting attachments required for disposal. Attach at least one document.'}, status=status.HTTP_400_BAD_REQUEST)
 
             if disposed_qty is not None and disposed_qty < asset.qty:
                 # Partial disposal: split the asset

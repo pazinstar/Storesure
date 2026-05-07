@@ -141,4 +141,18 @@ export const assetsService = {
         if (!response.ok) throw new Error("Failed");
         return response.json();
     }
+
+    async bulkClassify(items: Array<any>): Promise<any> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            return { status: 'mocked', count: items.length };
+        }
+        const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/capitalization/classify/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(items),
+        });
+        if (!response.ok) throw new Error('Failed to run bulk classification');
+        return response.json();
+    }
 };

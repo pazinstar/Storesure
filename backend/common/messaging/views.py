@@ -4,6 +4,10 @@ from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.parsers import MultiPartParser, FormParser
+from django.core.files.storage import default_storage
+from django.conf import settings
+import os
 
 from roles.admin.users.models import SystemUser
 from .models import Message
@@ -239,3 +243,48 @@ class ThreadView(generics.ListAPIView):
             Q(sender=su, recipient_id=other_id, sender_deleted=False) |
             Q(recipient=su, sender_id=other_id, recipient_deleted=False)
         ).select_related('sender', 'recipient').order_by('created_at')
+
+
+class AttachmentUploadView(APIView):
+    """POST /api/v1/messages/attachments/ - upload an attachment and create DocumentAttachment"""
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        from .models import DocumentAttachment
+        su = _get_system_user(request)
+        if not su:
+            return Response({'detail': 'User profile not found.'}, status=status.HTTP_403_FORBIDDEN)
+
+        entity_type = request.data.get('entity_type')
+        entity_id = request.data.get('entity_id')
+        doc_type = request.data.get('doc_type') or request.data.get('type')
+        upload = request.FILES.get('file')
+
+        if not entity_type or not entity_id or not upload:
+            return Response({'error': 'entity_type, entity_id and file are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Save file using default storage under attachments/
+        save_dir = os.path.join('attachments', entity_type)
+        filename = default_storage.save(os.path.join(save_dir, upload.name), upload)
+        # Get a path/URL to store in file_path. Prefer relative path.
+        file_path = filename
+
+        att = DocumentAttachment.objects.create(
+            entity_type=entity_type,
+            entity_id=str(entity_id),
+            file_path=file_path,
+            doc_type=doc_type,
+            uploaded_by=(su.email or str(su.id)),
+            is_active=True,
+        )
+
+        return Response({
+            'id': att.id,
+            'entity_type': att.entity_type,
+            'entity_id': att.entity_id,
+            'file_path': att.file_path,
+            'doc_type': att.doc_type,
+            'uploaded_by': att.uploaded_by,
+            'uploaded_at': att.uploaded_at,
+        }, status=status.HTTP_201_CREATED)

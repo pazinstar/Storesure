@@ -5,6 +5,7 @@ from .views import (
     MarkReadView, MarkAllReadView,
     ToggleStarView, DeleteMessageView,
     UnreadCountView, ThreadView,
+    AttachmentUploadView,
 )
 
 urlpatterns = [
@@ -19,4 +20,5 @@ urlpatterns = [
     path('<int:pk>/read/', MarkReadView.as_view(), name='messages-mark-read'),
     path('<int:pk>/star/', ToggleStarView.as_view(), name='messages-toggle-star'),
     path('<int:pk>/delete/', DeleteMessageView.as_view(), name='messages-delete'),
+    path('attachments/', AttachmentUploadView.as_view(), name='messages-attachments'),
 ]

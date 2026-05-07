@@ -80,6 +80,7 @@ import AssetMovement from "./pages/assets/AssetMovement";
 import BoardOfSurvey from "./pages/assets/BoardOfSurvey";
 import Disposal from "./pages/assets/Disposal";
 import AssetReports from "./pages/assets/AssetReports";
+import BulkCapitalization from "./pages/assets/BulkCapitalization";
 
 // Library module pages
 import LibraryDashboard from "./pages/library/LibraryDashboard";
@@ -605,6 +606,16 @@ const App = () => (
                                               <ProtectedRoute>
                                                 <AuthenticatedLayout>
                                                   <Disposal />
+                                                </AuthenticatedLayout>
+                                              </ProtectedRoute>
+                                            }
+                                          />
+                                          <Route
+                                            path="/assets/bulk-capitalize"
+                                            element={
+                                              <ProtectedRoute>
+                                                <AuthenticatedLayout>
+                                                  <BulkCapitalization />
                                                 </AuthenticatedLayout>
                                               </ProtectedRoute>
                                             }
