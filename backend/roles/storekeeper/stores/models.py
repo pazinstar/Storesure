@@ -1691,6 +1691,34 @@ class CapitalizationPrompt(models.Model):
         return f"{self.id} ({self.item_code}) -> {self.suggested_action}"
 
 
+class BulkCreationJob(models.Model):
+    """Background job for materializing child assets for a bulk group."""
+    JOB_STATUS = [
+        ('queued', 'Queued'),
+        ('processing', 'Processing'),
+        ('done', 'Done'),
+        ('failed', 'Failed'),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    bulk_group_ref = models.CharField(max_length=100)
+    options = models.JSONField(default=dict)
+    status = models.CharField(max_length=20, choices=JOB_STATUS, default='queued')
+    attempts = models.IntegerField(default=0)
+    last_error = models.TextField(blank=True, default='')
+    created_by = models.CharField(max_length=255, blank=True, default='')
+    createdAt = models.DateTimeField(auto_now_add=True)
+    updatedAt = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'stores_bulk_creation_job'
+        verbose_name = 'Bulk Creation Job'
+        verbose_name_plural = 'Bulk Creation Jobs'
+
+    def __str__(self):
+        return f"Job {self.id} - {self.bulk_group_ref} ({self.status})"
+
+
 class LsoRecord(models.Model):
     """
     Local Service Order (LSO) / Local Purchase Order (LPO) records.

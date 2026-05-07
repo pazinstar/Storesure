@@ -1457,6 +1457,20 @@ class BulkCapitalizationProcessView(APIView):
     def post(self, request, format=None):
         from rest_framework import status
         serializer = BulkProcessSerializer(data=request.data)
+        # Permission: require staff or group 'AssetApprover'
+        user = request.user
+        is_approver = False
+        try:
+            if user.is_staff or user.is_superuser:
+                is_approver = True
+            else:
+                is_approver = user.groups.filter(name='AssetApprover').exists()
+        except Exception:
+            is_approver = False
+
+        if not is_approver:
+            return Response({'detail': 'Forbidden - approver role required'}, status=403)
+
         if serializer.is_valid():
             bulk_ref = serializer.validated_data['bulk_group_ref']
             approved_by = serializer.validated_data['approved_by']
@@ -1492,6 +1506,18 @@ class BulkCapitalizationProcessView(APIView):
 
             # Optionally create child assets: one asset per unit (qty=1) linked to master
             child_assets = []
+            # For large batches we enqueue a background job instead of creating synchronously
+            BG_CHILD_THRESHOLD = 100
+            if create_children and total_qty > BG_CHILD_THRESHOLD:
+                # create job record and return job id
+                job = BulkCreationJob.objects.create(
+                    bulk_group_ref=bulk_ref,
+                    options={'child_tag_prefix': child_tag_prefix, 'approved_by': approved_by, 'group_name': group_name},
+                    status='queued',
+                    created_by=approved_by,
+                )
+                return Response({'detail': 'Child materialization queued', 'job_id': job.id, 'master_id': master_asset.id}, status=status.HTTP_202_ACCEPTED)
+
             if create_children:
                 tag_counter = 1
                 for p in prompts:
@@ -1859,3 +1885,129 @@ class DepreciationRunTriggerView(APIView):
             return Response({'run_code': run.run_code, 'status': run.status, 'total': float(run.total_depreciation)})
         except Exception as e:
             return Response({'error': str(e)}, status=400)
+
+
+class AssetRegisterReportView(APIView):
+    """GET /assets/reports/register/ - return the asset register as JSON"""
+    def get(self, request, *args, **kwargs):
+        from .models import FixedAsset
+        assets = FixedAsset.objects.all().order_by('assetCode')
+        rows = []
+        for a in assets:
+            rows.append({
+                'id': a.id,
+                'assetCode': a.assetCode,
+                'name': a.name,
+                'category': a.category,
+                'acquisitionDate': a.acq_date.isoformat() if a.acq_date else None,
+                'cost': float(a.total_cost or 0),
+                'nbv': float(a.nbv or 0),
+                'status': a.status,
+                'dept': a.dept_name,
+                'location': a.location,
+                'custodian': a.custodian,
+            })
+        return Response({'count': len(rows), 'results': rows})
+
+
+class DepreciationScheduleView(APIView):
+    """GET /assets/reports/depreciation/?asset_id=<id>&periods=<n>"""
+    def get(self, request, *args, **kwargs):
+        asset_id = request.query_params.get('asset_id')
+        periods = int(request.query_params.get('periods') or 0)
+        from decimal import Decimal
+        from .models import FixedAsset
+        if not asset_id:
+            return Response({'error': 'asset_id query param required'}, status=400)
+        try:
+            asset = FixedAsset.objects.get(id=asset_id)
+        except FixedAsset.DoesNotExist:
+            return Response({'error': 'asset not found'}, status=404)
+
+        useful = int(asset.useful_life or 0)
+        months = periods if periods > 0 else useful
+        if months <= 0:
+            return Response({'error': 'asset has no useful_life set'}, status=400)
+
+        base = (asset.total_cost or Decimal('0')) - (asset.residual_value or Decimal('0'))
+        if base <= 0:
+            return Response({'schedule': [], 'notes': 'No depreciable base'})
+
+        monthly = (Decimal(base) / Decimal(useful)) if useful else Decimal('0')
+        schedule = []
+        acc = Decimal(asset.accumulated_depreciation or 0)
+        nbv = Decimal(asset.nbv or asset.total_cost or 0)
+        start = asset.acq_date
+        from datetime import timedelta
+        y = start.year if start else None
+        m = start.month if start else None
+        for i in range(months):
+            amt = float(monthly.quantize(Decimal('0.01')))
+            acc = (acc + Decimal(str(amt))).quantize(Decimal('0.01'))
+            nbv = (Decimal(asset.total_cost or 0) - acc).quantize(Decimal('0.01'))
+            schedule.append({'period_index': i+1, 'monthly_depreciation': amt, 'accumulated_depreciation': float(acc), 'nbv': float(nbv)})
+        return Response({'asset': asset.id, 'schedule': schedule})
+
+
+class NetBookValueReportView(APIView):
+    """GET /assets/reports/nbv/ - return NBV per asset and totals"""
+    def get(self, request, *args, **kwargs):
+        from .models import FixedAsset
+        from django.db.models import Sum
+        assets = FixedAsset.objects.all().order_by('assetCode')
+        rows = []
+        for a in assets:
+            rows.append({'id': a.id, 'assetCode': a.assetCode, 'name': a.name, 'nbv': float(a.nbv or 0), 'accumulated_depreciation': float(a.accumulated_depreciation or 0), 'cost': float(a.total_cost or 0)})
+        totals = assets.aggregate(total_cost=Sum('total_cost'), total_nbv=Sum('nbv'), total_accum=Sum('accumulated_depreciation'))
+        return Response({'count': len(rows), 'totals': {'total_cost': float(totals.get('total_cost') or 0), 'total_nbv': float(totals.get('total_nbv') or 0), 'total_accumulated': float(totals.get('total_accum') or 0)}, 'results': rows})
+
+
+class AssetMovementReportView(APIView):
+    """GET /assets/reports/movements/?asset_id=<id>&from=<date>&to=<date>"""
+    def get(self, request, *args, **kwargs):
+        asset_id = request.query_params.get('asset_id')
+        date_from = request.query_params.get('from')
+        date_to = request.query_params.get('to')
+        from .models import FixedAsset, AssetStatusHistory, LedgerReceipt, LedgerIssue
+        movements = []
+        if asset_id:
+            try:
+                asset = FixedAsset.objects.get(id=asset_id)
+            except FixedAsset.DoesNotExist:
+                return Response({'error': 'asset not found'}, status=404)
+            # status history
+            for h in AssetStatusHistory.objects.filter(asset=asset).order_by('createdAt'):
+                movements.append({'type': 'status_change', 'date': h.createdAt.isoformat(), 'from': h.from_status, 'to': h.to_status, 'by': h.changed_by, 'reason': h.reason})
+            # ledger movements via source_item link
+            if asset.source_item:
+                ledger_qs = LedgerReceipt.objects.filter(ledger__item=asset.source_item)
+                for r in ledger_qs.order_by('date'):
+                    movements.append({'type': 'receipt', 'date': r.date.isoformat() if r.date else None, 'grn': r.grnNo, 'qty': r.qty, 'total': float(r.totalCost)})
+                issue_qs = LedgerIssue.objects.filter(ledger__item=asset.source_item)
+                for it in issue_qs.order_by('date'):
+                    movements.append({'type': 'issue', 'date': it.date.isoformat() if it.date else None, 's13': it.s13No, 'qty': it.qty, 'total': float(it.totalCost)})
+        else:
+            # return recent status changes across assets
+            for h in AssetStatusHistory.objects.all().order_by('-createdAt')[:200]:
+                movements.append({'asset': h.asset.assetCode if h.asset else None, 'type': 'status_change', 'date': h.createdAt.isoformat(), 'from': h.from_status, 'to': h.to_status, 'by': h.changed_by})
+
+        # optional date filtering
+        if date_from or date_to:
+            import datetime
+            def in_range(d):
+                if not d:
+                    return True
+                try:
+                    dt = datetime.date.fromisoformat(d.split('T')[0])
+                except Exception:
+                    return True
+                if date_from:
+                    if dt < datetime.date.fromisoformat(date_from):
+                        return False
+                if date_to:
+                    if dt > datetime.date.fromisoformat(date_to):
+                        return False
+                return True
+            movements = [m for m in movements if in_range(m.get('date'))]
+
+        return Response({'count': len(movements), 'results': movements})

@@ -69,6 +69,11 @@ from .views import (
     CapitalizationPendingPromptsView,
     BulkCapitalizationCreateView,
     BulkCapitalizationProcessView,
+    DepreciationRunTriggerView,
+    AssetRegisterReportView,
+    DepreciationScheduleView,
+    NetBookValueReportView,
+    AssetMovementReportView,
     FixedAssetListView,
     FixedAssetDetailView,
     FixedAssetStatusTransitionView,
@@ -160,6 +165,13 @@ urlpatterns = [
     path('capitalization/override/', OverrideDecisionView.as_view(), name='storekeeper-cap-override'),
     path('capitalization/bulk/', BulkCapitalizationCreateView.as_view(), name='storekeeper-cap-bulk'),
     path('capitalization/bulk/process/', BulkCapitalizationProcessView.as_view(), name='storekeeper-cap-bulk-process'),
+
+    # Depreciation and reports
+    path('assets/depreciation/run/', DepreciationRunTriggerView.as_view(), name='storekeeper-depreciation-run'),
+    path('assets/reports/register/', AssetRegisterReportView.as_view(), name='storekeeper-assets-register'),
+    path('assets/reports/depreciation/', DepreciationScheduleView.as_view(), name='storekeeper-assets-depreciation-schedule'),
+    path('assets/reports/nbv/', NetBookValueReportView.as_view(), name='storekeeper-assets-nbv'),
+    path('assets/reports/movements/', AssetMovementReportView.as_view(), name='storekeeper-assets-movements'),
 
     # Phase 4 — Fixed Asset Register & Lifecycle Management
     path('assets/stats/', FixedAssetStatsView.as_view(), name='storekeeper-assets-stats'),

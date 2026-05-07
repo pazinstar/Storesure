@@ -83,6 +83,7 @@ import BoardOfSurvey from "./pages/assets/BoardOfSurvey";
 import Disposal from "./pages/assets/Disposal";
 import AssetReports from "./pages/assets/AssetReports";
 import BulkCapitalization from "./pages/assets/BulkCapitalization";
+import BulkPrompts from "./pages/assets/BulkPrompts";
 import CapitalizationSettings from "./pages/assets/CapitalizationSettings";
 import SingleClassify from "./pages/assets/SingleClassify";
 
@@ -632,6 +633,16 @@ const App = () => (
                                               <ProtectedRoute>
                                                 <AuthenticatedLayout>
                                                   <CapitalizationSettings />
+                                                </AuthenticatedLayout>
+                                              </ProtectedRoute>
+                                            }
+                                          />
+                                          <Route
+                                            path="/assets/bulk-prompts"
+                                            element={
+                                              <ProtectedRoute>
+                                                <AuthenticatedLayout>
+                                                  <BulkPrompts />
                                                 </AuthenticatedLayout>
                                               </ProtectedRoute>
                                             }
