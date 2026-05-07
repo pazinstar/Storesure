@@ -821,6 +821,48 @@ class ClassifyItemSerializer(serializers.Serializer):
         }
 
 
+class BulkCapitalizationSerializer(serializers.Serializer):
+    """Serializer for creating grouped/bulk capitalization prompts."""
+    items = serializers.ListField(child=serializers.DictField(), allow_empty=False)
+    created_by = serializers.CharField(required=False, allow_blank=True, default='')
+
+    def validate(self, data):
+        # Validate each item dict contains required fields
+        validated = []
+        for idx, itm in enumerate(data['items']):
+            if 'item_id' not in itm:
+                raise ValidationError(f"items[{idx}].item_id is required")
+            if 'qty' not in itm:
+                raise ValidationError(f"items[{idx}].qty is required")
+            if 'unit_cost' not in itm:
+                raise ValidationError(f"items[{idx}].unit_cost is required")
+            # ensure item exists
+            try:
+                item = InventoryItem.objects.get(id=itm['item_id'])
+            except InventoryItem.DoesNotExist:
+                raise ValidationError(f"Item with id '{itm['item_id']}' not found")
+            validated.append({
+                'item': item,
+                'qty': int(itm['qty']),
+                'unit_cost': Decimal(str(itm['unit_cost'])),
+            })
+        data['validated_items'] = validated
+        return data
+
+
+class BulkProcessSerializer(serializers.Serializer):
+    """Serializer for processing/approving a bulk group into assets.
+
+    Supports options to create a single master asset representing the group
+    and optionally materialize child assets (one-per-unit) with tagging.
+    """
+    bulk_group_ref = serializers.CharField(required=True)
+    approved_by = serializers.CharField(required=True)
+    create_children = serializers.BooleanField(required=False, default=False)
+    child_tag_prefix = serializers.CharField(required=False, allow_blank=True, default='')
+    group_name = serializers.CharField(required=False, allow_blank=True, default='')
+
+
 class OverrideDecisionSerializer(serializers.Serializer):
     """Serializer for applying a user override on a capitalization prompt."""
     prompt_id = serializers.CharField(required=True)

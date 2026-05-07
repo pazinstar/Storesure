@@ -1408,6 +1408,132 @@ class CapitalizationPendingPromptsView(APIView):
         })
 
 
+class BulkCapitalizationCreateView(APIView):
+    """
+    POST /capitalization/bulk/ — Create grouped capitalization prompts for a list of items.
+    Returns the created prompts and a `bulk_group_ref` used to approve/process them.
+    """
+    def post(self, request, format=None):
+        from rest_framework import status
+        serializer = BulkCapitalizationSerializer(data=request.data)
+        if serializer.is_valid():
+            data = serializer.validated_data
+            validated_items = data.get('validated_items', [])
+            created_by = data.get('created_by', '')
+            # generate bulk ref
+            from django.utils import timezone
+            ts = timezone.now().strftime('%Y%m%d%H%M%S')
+            bulk_ref = f'BULK-{ts}'
+            prompts = []
+            for entry in validated_items:
+                item = entry['item']
+                qty = entry['qty']
+                unit_cost = entry['unit_cost']
+                # run classification
+                classification = classify_item(item, qty=qty, unit_cost=unit_cost, created_by=created_by)
+                # log prompt but mark as bulk and pending
+                prompt = log_classification_prompt(
+                    item=item, qty=qty, unit_cost=unit_cost,
+                    classification=classification, created_by=created_by,
+                    bulk_group_ref=bulk_ref,
+                )
+                # ensure pending for bulk groups
+                prompt.is_bulk = True
+                prompt.bulk_group_ref = bulk_ref
+                prompt.approval_status = 'pending'
+                prompt.save()
+                prompts.append(prompt)
+
+            result = CapitalizationPromptListSerializer(prompts, many=True).data
+            return Response({'bulk_group_ref': bulk_ref, 'prompts': result}, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class BulkCapitalizationProcessView(APIView):
+    """
+    POST /capitalization/bulk/process/ — Approve a bulk group and create FixedAsset records.
+    Expects `bulk_group_ref` and `approved_by` in the payload.
+    """
+    def post(self, request, format=None):
+        from rest_framework import status
+        serializer = BulkProcessSerializer(data=request.data)
+        if serializer.is_valid():
+            bulk_ref = serializer.validated_data['bulk_group_ref']
+            approved_by = serializer.validated_data['approved_by']
+            create_children = serializer.validated_data.get('create_children', False)
+            child_tag_prefix = serializer.validated_data.get('child_tag_prefix', '')
+            group_name = serializer.validated_data.get('group_name', '')
+
+            prompts = CapitalizationPrompt.objects.filter(bulk_group_ref=bulk_ref, approval_status='pending')
+            if not prompts.exists():
+                return Response({'detail': 'No pending prompts for this bulk_group_ref'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Aggregate totals for master asset
+            total_qty = sum([p.quantity for p in prompts])
+            total_cost = sum([p.total_value or (p.unit_cost * p.quantity) for p in prompts])
+
+            master_name = group_name or f"Grouped Asset {bulk_ref}"
+            master_payload = {
+                'name': master_name,
+                'qty': total_qty,
+                'unit_cost': (total_cost / total_qty) if total_qty else 0,
+                'total_cost': total_cost,
+                'category_type': prompts[0].suggested_category_type or prompts[0].category_type or 'fixed_asset',
+                'source_prompt': '',
+                'created_by': approved_by,
+            }
+
+            created_assets = []
+            fa_master_serializer = FixedAssetCreateSerializer(data=master_payload)
+            if not fa_master_serializer.is_valid():
+                return Response({'detail': 'Failed to validate master asset payload', 'errors': fa_master_serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+            master_asset = fa_master_serializer.save()
+
+            # Optionally create child assets: one asset per unit (qty=1) linked to master
+            child_assets = []
+            if create_children:
+                tag_counter = 1
+                for p in prompts:
+                    for i in range(p.quantity):
+                        child_payload = {
+                            'name': p.item_name or (p.item.name if p.item else f'Child of {master_name}'),
+                            'qty': 1,
+                            'unit_cost': p.unit_cost,
+                            'total_cost': p.unit_cost,
+                            'category_type': p.suggested_category_type or p.category_type or 'fixed_asset',
+                            'parent_asset': master_asset.id,
+                            'source_item': p.item.id if p.item else None,
+                            'source_prompt': p.id,
+                            'created_by': approved_by,
+                        }
+                        # assign tag if requested
+                        if child_tag_prefix:
+                            child_payload['tag_no'] = f"{child_tag_prefix}-{tag_counter:06d}"
+                        child_serializer = FixedAssetCreateSerializer(data=child_payload)
+                        if child_serializer.is_valid():
+                            child = child_serializer.save()
+                            child_assets.append(child)
+                        else:
+                            # record error on prompt
+                            p.override_reason = f"Child asset creation failed: {child_serializer.errors}"
+                            p.save()
+                        tag_counter += 1
+
+            # Mark all prompts in group as approved and link to master
+            from django.utils import timezone
+            for p in prompts:
+                p.approval_status = 'approved'
+                p.approved_by = approved_by
+                p.approved_at = timezone.now()
+                p.bulk_group_ref = bulk_ref
+                p.save()
+
+            created_assets = [master_asset] + child_assets
+            return Response({'created': FixedAssetListSerializer(created_assets, many=True).data, 'master_id': master_asset.id}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
 # =============================================================================
 # Phase 4 — Fixed Asset Register & Lifecycle Management Views
 # =============================================================================

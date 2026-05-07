@@ -10,6 +10,7 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { HeaderActions } from "@/components/HeaderActions";
 import S2RetryQueue from "@/components/S2RetryQueue";
+import CapitalizationQueue from "@/components/CapitalizationQueue";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { NotificationProvider } from "@/contexts/NotificationContext";
 import { MessageProvider } from "@/contexts/MessageContext";
@@ -82,6 +83,8 @@ import BoardOfSurvey from "./pages/assets/BoardOfSurvey";
 import Disposal from "./pages/assets/Disposal";
 import AssetReports from "./pages/assets/AssetReports";
 import BulkCapitalization from "./pages/assets/BulkCapitalization";
+import CapitalizationSettings from "./pages/assets/CapitalizationSettings";
+import SingleClassify from "./pages/assets/SingleClassify";
 
 // Library module pages
 import LibraryDashboard from "./pages/library/LibraryDashboard";
@@ -156,11 +159,12 @@ function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
           <div className="ml-4 flex-1">
             <SchoolNameDisplay />
           </div>
-          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3">
             <UserLocationDisplay />
             <ThemeToggle />
             <HeaderActions />
-            <S2RetryQueue />
+              <S2RetryQueue />
+              <CapitalizationQueue />
           </div>
         </header>
         <main className="flex-1 min-w-0 overflow-auto p-6">{children}</main>
@@ -618,6 +622,26 @@ const App = () => (
                                               <ProtectedRoute>
                                                 <AuthenticatedLayout>
                                                   <BulkCapitalization />
+                                                </AuthenticatedLayout>
+                                              </ProtectedRoute>
+                                            }
+                                          />
+                                          <Route
+                                            path="/assets/capitalization-settings"
+                                            element={
+                                              <ProtectedRoute>
+                                                <AuthenticatedLayout>
+                                                  <CapitalizationSettings />
+                                                </AuthenticatedLayout>
+                                              </ProtectedRoute>
+                                            }
+                                          />
+                                          <Route
+                                            path="/assets/classify"
+                                            element={
+                                              <ProtectedRoute>
+                                                <AuthenticatedLayout>
+                                                  <SingleClassify />
                                                 </AuthenticatedLayout>
                                               </ProtectedRoute>
                                             }

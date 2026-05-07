@@ -67,6 +67,8 @@ from .views import (
     ClassifyItemView,
     OverrideDecisionView,
     CapitalizationPendingPromptsView,
+    BulkCapitalizationCreateView,
+    BulkCapitalizationProcessView,
     FixedAssetListView,
     FixedAssetDetailView,
     FixedAssetStatusTransitionView,
@@ -156,6 +158,8 @@ urlpatterns = [
     path('capitalization/prompts/<str:id>/', CapitalizationPromptDetailView.as_view(), name='storekeeper-cap-prompts-detail'),
     path('capitalization/classify/', ClassifyItemView.as_view(), name='storekeeper-cap-classify'),
     path('capitalization/override/', OverrideDecisionView.as_view(), name='storekeeper-cap-override'),
+    path('capitalization/bulk/', BulkCapitalizationCreateView.as_view(), name='storekeeper-cap-bulk'),
+    path('capitalization/bulk/process/', BulkCapitalizationProcessView.as_view(), name='storekeeper-cap-bulk-process'),
 
     # Phase 4 — Fixed Asset Register & Lifecycle Management
     path('assets/stats/', FixedAssetStatsView.as_view(), name='storekeeper-assets-stats'),

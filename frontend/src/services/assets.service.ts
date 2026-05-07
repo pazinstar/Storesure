@@ -157,4 +157,89 @@ export const assetsService = {
         if (!response.ok) throw new Error('Failed to run bulk classification');
         return response.json();
     }
+,
+
+    async createBulkPrompts(payload: any): Promise<any> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            return { status: 'mocked', bulk_group_ref: 'BULK-MOCK', prompts: [] };
+        }
+        const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/capitalization/bulk/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) throw new Error('Failed to create bulk prompts');
+        return response.json();
+    },
+
+    async processBulkPrompts(payload: { bulk_group_ref: string; approved_by: string; create_children?: boolean; child_tag_prefix?: string; group_name?: string;}): Promise<any> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            return { status: 'mocked', created: [] };
+        }
+        const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/capitalization/bulk/process/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) throw new Error('Failed to process bulk prompts');
+        return response.json();
+    },
+
+    async getCapitalizationSettings(): Promise<any> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            return { threshold: 50000, bulk_materiality: 100000, min_useful_life: 12, depreciation_start_rule: 'month_after_acquisition', default_residual_pct: 10.0, asset_classes: [] };
+        }
+        const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/capitalization/settings/`);
+        if (!response.ok) throw new Error('Failed to load capitalization settings');
+        return response.json();
+    },
+
+    async updateCapitalizationSettings(payload: any): Promise<any> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            return { ...payload };
+        }
+        const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/capitalization/settings/`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) throw new Error('Failed to update capitalization settings');
+        return response.json();
+    },
+
+    async classifyItem(payload: any): Promise<any> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            return { status: 'mocked', classification: { suggested_action: 'prompt' } };
+        }
+        const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/capitalization/classify/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) throw new Error('Failed to classify item');
+        return response.json();
+    }
+,
+
+    async createAsset(payload: any): Promise<any> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            return { status: 'mocked', ...payload };
+        }
+        const response = await fetch(`${apiConfig.baseUrl}/assets/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+            const txt = await response.text();
+            throw new Error(`Failed to create asset: ${txt}`);
+        }
+        return response.json();
+    }
 };

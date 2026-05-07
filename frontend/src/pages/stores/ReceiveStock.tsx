@@ -14,6 +14,7 @@ import { LPO, AssetType } from "@/mock/data";
 import { toast } from "sonner";
 import { useNotifications } from "@/contexts/NotificationContext";
 import { api } from "@/services/api";
+import { assetsService } from '@/services/assets.service';
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { DocumentStatus, S11Record } from "@/mock/data";
 import {
@@ -46,6 +47,7 @@ import {
 } from "lucide-react";
 import S11PrintTemplate, { S11PrintData } from "@/components/prints/S11PrintTemplate";
 import PrintDialog from "@/components/prints/PrintDialog";
+import CapitalizationSummaryDialog from '@/components/CapitalizationSummaryDialog';
 
 // Type for selected LPO items in form
 interface SelectedLPOData {
@@ -93,6 +95,8 @@ export default function ReceiveStock() {
   const [printData, setPrintData] = useState<S11PrintData | null>(null);
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<S11Record | null>(null);
+  const [capSuggestions, setCapSuggestions] = useState<any[]>([]);
+  const [showCapDialog, setShowCapDialog] = useState(false);
   const [supplierName, setSupplierName] = useState("");
   const [lpoDate, setLpoDate] = useState("");
   const { logStoresAction } = useAuditLog();
@@ -233,6 +237,7 @@ export default function ReceiveStock() {
           try {
             const full = await api.getS11Record(updatedRecord.id);
             const items: any[] = full.items || [];
+            const capResults: any[] = [];
             for (const it of items) {
               const itemId = it.itemCode || it.item_id || it.id || it.code || it.item || null;
               const qty = it.qty || it.quantity || it.quantityReceived || it.receivedQty || 0;
@@ -248,12 +253,29 @@ export default function ReceiveStock() {
                 // enqueue for retry
                 try { const id = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`; await import("@/lib/s2Queue").then(m => m.enqueue({ id, type: 'RECEIPT', payload: { item_id: itemId, date: full.date || new Date().toISOString().split('T')[0], qty, unit_cost, supplier_name: full.supplier || full.supplierName || '', ref_no: full.lpoReference || full.reference || full.id, created_by: user?.name || 'system' } })); } catch(_){}
               }
+
+              // Run capitalization classification for this received item (auto-suggestion)
+              try {
+                const classifyRes = await assetsService.classifyItem({ item_id: itemId, qty, unit_cost });
+                const classification = classifyRes?.classification;
+                capResults.push({ item_id: itemId, description: it.description || '', qty, unit_cost, classification });
+              } catch (e:any) {
+                console.warn('Capitalization classify failed', e);
+              }
             }
           } catch (e: any) {
             const msg = `Failed to post S2 receipts for S11 ${updatedRecord.id}: ${e?.message || String(e)}`;
             console.warn(msg, e);
             toast.error("S2 Receipts Batch Failed", { description: msg });
             addNotification({ title: "S2 Receipts Batch Failed", message: msg, type: "error", link: "/stores/receive" });
+          }
+          // After processing all items, show capitalization summary if any suggestions exist
+          if (capResults.length > 0) {
+            const interesting = capResults.filter(r => r.classification && (r.classification.suggested_action === 'capitalize' || r.classification.suggested_action === 'bulk_capitalize' || r.classification.override_required));
+            if (interesting.length > 0) {
+              setCapSuggestions(interesting);
+              setShowCapDialog(true);
+            }
           }
         })();
       }
@@ -352,6 +374,12 @@ export default function ReceiveStock() {
     setSelectedRecord(rec);
     setViewDialogOpen(true);
     logStoresAction("S11 Viewed", `Viewed S11 record ${id}`);
+  };
+
+  // Capitalization dialog close handler
+  const closeCapDialog = () => {
+    setShowCapDialog(false);
+    setCapSuggestions([]);
   };
 
   const handlePrintS11 = (record: S11Record) => {
@@ -1001,6 +1029,7 @@ export default function ReceiveStock() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <CapitalizationSummaryDialog open={showCapDialog} onClose={() => { setShowCapDialog(false); setCapSuggestions([]); }} items={capSuggestions} />
     </div>
   );
 }
