@@ -74,6 +74,7 @@ from .views import (
     DepreciationScheduleView,
     NetBookValueReportView,
     AssetMovementReportView,
+    DisposalApprovalView,
     FixedAssetListView,
     FixedAssetDetailView,
     FixedAssetStatusTransitionView,
@@ -172,6 +173,7 @@ urlpatterns = [
     path('assets/reports/depreciation/', DepreciationScheduleView.as_view(), name='storekeeper-assets-depreciation-schedule'),
     path('assets/reports/nbv/', NetBookValueReportView.as_view(), name='storekeeper-assets-nbv'),
     path('assets/reports/movements/', AssetMovementReportView.as_view(), name='storekeeper-assets-movements'),
+    path('assets/disposals/<int:pk>/approve/', DisposalApprovalView.as_view(), name='storekeeper-disposal-approve'),
 
     # Phase 4 — Fixed Asset Register & Lifecycle Management
     path('assets/stats/', FixedAssetStatsView.as_view(), name='storekeeper-assets-stats'),

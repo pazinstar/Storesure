@@ -8,6 +8,7 @@ from .models import (
     IssueHistory, 
     ReceivingHistory
 )
+from .models import AssetDisposalRecord
 from .models import ItemTypeChoices
 
 VALID_ITEM_TYPES = {choice.value for choice in ItemTypeChoices}
@@ -1044,3 +1045,22 @@ class FixedAssetDisposalSerializer(serializers.Serializer):
                     "Use full disposal instead."
                 )
         return value
+
+
+class AssetDisposalRecordSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AssetDisposalRecord
+        fields = '__all__'
+        read_only_fields = ['id', 'createdAt', 'approved_at']
+
+
+class DisposalApprovalSerializer(serializers.Serializer):
+    approval_status = serializers.ChoiceField(choices=['approved', 'rejected'], required=True)
+    committee_reference = serializers.CharField(required=False, allow_blank=True)
+    proceeds = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
+    post_write_off = serializers.BooleanField(required=False, default=False)
+    approved_by = serializers.CharField(required=True, allow_blank=False)
+
+    def validate(self, data):
+        # if approving and posting write-off ensure proceeds provided (can be zero)
+        return data

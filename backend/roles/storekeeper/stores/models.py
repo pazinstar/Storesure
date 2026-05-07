@@ -789,6 +789,35 @@ class DisposalRecord(models.Model):
     def __str__(self):
         return self.id
 
+
+class AssetDisposalRecord(models.Model):
+    """Record a disposal event tied to a FixedAsset (full or partial)."""
+    id = models.BigAutoField(primary_key=True)
+    asset = models.ForeignKey('FixedAsset', on_delete=models.CASCADE, related_name='disposals')
+    disposed_qty = models.IntegerField(default=0)
+    disposal_value = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    disposal_status = models.CharField(max_length=50, blank=True, default='')
+    disposal_date = models.DateField(null=True, blank=True)
+    reason = models.TextField(blank=True, default='')
+    created_by = models.CharField(max_length=255, blank=True, default='')
+    createdAt = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'stores_asset_disposal'
+        verbose_name = 'Asset Disposal'
+        verbose_name_plural = 'Asset Disposals'
+
+    def __str__(self):
+        return f"{self.asset.assetCode} - disposed {self.disposed_qty} @ {self.disposal_date}"
+
+    # Approval workflow fields
+    approval_status = models.CharField(max_length=20, default='pending', help_text='pending|approved|rejected')
+    committee_reference = models.CharField(max_length=255, blank=True, default='')
+    proceeds = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    write_off_posted = models.BooleanField(default=False)
+    approved_by = models.CharField(max_length=255, blank=True, default='')
+    approved_at = models.DateTimeField(null=True, blank=True)
+
 class InventorySetting(models.Model):
     key = models.CharField(max_length=100, primary_key=True)
     value = models.JSONField(default=list)
@@ -1291,6 +1320,7 @@ class FixedAsset(models.Model):
         max_length=30, choices=DEPRECIATION_METHOD_CHOICES,
         default='straight_line',
     )
+    depreciation_start_date = models.DateField(null=True, blank=True, help_text='Date when depreciation begins')
     accumulated_depreciation = models.DecimalField(
         max_digits=12, decimal_places=2, default=0
     )

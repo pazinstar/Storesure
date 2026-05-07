@@ -90,9 +90,11 @@ def run_depreciation(run_type: str, year: int, month: int = None, created_by: st
 
     for asset in assets:
         try:
-            # Mid-year handling: if asset.acq_date after period, skip
-            if run_type == 'monthly' and asset.acq_date:
-                if asset.acq_date.year > year or (asset.acq_date.year == year and asset.acq_date.month > month):
+            # Use depreciation_start_date if present, otherwise fallback to acquisition date
+            start_date = getattr(asset, 'depreciation_start_date', None) or asset.acq_date
+            # Mid-period handling: if start_date after period, skip
+            if run_type == 'monthly' and start_date:
+                if start_date.year > year or (start_date.year == year and start_date.month > month):
                     continue
 
             monthly = _calc_monthly_depr(asset)
@@ -103,13 +105,13 @@ def run_depreciation(run_type: str, year: int, month: int = None, created_by: st
             prorate_ratio = Decimal('1.0')
             is_mid = False
             mid_start_month = None
-            if run_type == 'monthly' and asset.acq_date and asset.acq_date.year == year and asset.acq_date.month == month:
+            if run_type == 'monthly' and start_date and start_date.year == year and start_date.month == month:
                 days_in_month = calendar.monthrange(year, month)[1]
-                active_days = days_in_month - asset.acq_date.day + 1
+                active_days = days_in_month - start_date.day + 1
                 prorate_ratio = Decimal(active_days) / Decimal(days_in_month)
                 prorate_ratio = Decimal(prorate_ratio).quantize(Decimal('0.0001'))
                 is_mid = True
-                mid_start_month = asset.acq_date.month
+                mid_start_month = start_date.month
 
             monthly_amount = _quantize(monthly * prorate_ratio)
 

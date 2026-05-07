@@ -1573,6 +1573,141 @@ from .serializers import (
     AssetMaintenanceCreateSerializer,
 )
 
+class DisposalApprovalView(APIView):
+    """POST /assets/disposals/<pk>/approve/ — approve or reject a disposal record.
+
+    When approved with `post_write_off=True`, posts a write-off GL entry (if finance integration available),
+    updates asset qty/NBV proportionally for partial disposals or marks disposed for full disposals,
+    and records audit info.
+    """
+    def post(self, request, pk, *args, **kwargs):
+        from rest_framework import status
+        from .serializers import DisposalApprovalSerializer, AssetDisposalRecordSerializer
+        try:
+            record = AssetDisposalRecord.objects.get(pk=pk)
+        except AssetDisposalRecord.DoesNotExist:
+            return Response({'error': 'disposal record not found'}, status=404)
+
+        serializer = DisposalApprovalSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        data = serializer.validated_data
+        # permission check: approver role required
+        user = request.user
+        is_approver = False
+        try:
+            if user.is_staff or user.is_superuser:
+                is_approver = True
+            else:
+                is_approver = user.groups.filter(name='AssetApprover').exists()
+        except Exception:
+            is_approver = False
+        if not is_approver:
+            return Response({'detail': 'Forbidden - approver role required'}, status=403)
+
+        # apply approval
+        from django.utils import timezone
+        record.approval_status = data['approval_status']
+        record.committee_reference = data.get('committee_reference') or record.committee_reference
+        record.proceeds = data.get('proceeds') or 0
+        record.approved_by = data.get('approved_by')
+        record.approved_at = timezone.now()
+        record.save()
+
+        # If approved and write-off requested, perform accounting and asset adjustments
+        if record.approval_status == 'approved' and data.get('post_write_off'):
+            try:
+                # Post write-off to GL if finance integration available
+                try:
+                    from roles.finance.views import _post_gl
+                    from roles.finance.models import AccountingPeriod, ChartOfAccount
+                except Exception:
+                    _post_gl = None
+
+                # Determine asset and proportional adjustments
+                asset = record.asset
+                disposed_qty = int(record.disposed_qty or 0)
+                if disposed_qty <= 0:
+                    raise ValueError('disposed_qty must be positive to post write-off')
+
+                # Compute proportion and adjust asset
+                ratio = disposed_qty / (asset.qty or 1)
+                cost_reduction = float((asset.total_cost or 0) * ratio)
+                nbv_reduction = float((asset.nbv or asset.total_cost or 0) * ratio)
+
+                # If partial disposal, reduce asset qty and costs
+                if disposed_qty < asset.qty:
+                    asset.qty = asset.qty - disposed_qty
+                    asset.total_cost = float((asset.total_cost or 0) - cost_reduction)
+                    asset.accumulated_depreciation = float((asset.accumulated_depreciation or 0) - nbv_reduction + (cost_reduction - nbv_reduction))
+                    asset.nbv = float((asset.nbv or 0) - nbv_reduction)
+                    asset.save()
+                else:
+                    # full disposal
+                    asset.status = 'disposed'
+                    asset.disposal_status = record.disposal_status
+                    asset.disposal_date = record.disposal_date
+                    asset.disposal_value = record.disposal_value
+                    asset.disposal_reason = record.reason
+                    asset.save()
+
+                # Post GL: debit accumulated depreciation / credit asset cost difference as write-off/proceeds entries
+                if _post_gl is not None:
+                    period = AccountingPeriod.objects.filter(status=AccountingPeriod.STATUS_OPEN).first()
+                    if period:
+                        from decimal import Decimal
+                        # configure accounts via settings if available
+                        from django.conf import settings
+                        acc_cost = getattr(settings, 'FIXED_ASSET_ACCOUNT', None)
+                        acc_accum = getattr(settings, 'ACCUMULATED_DEPR_ACCOUNT', None)
+                        acc_loss = getattr(settings, 'DISPOSAL_LOSS_ACCOUNT', None)
+                        acc_proceeds = getattr(settings, 'DISPOSAL_PROCEEDS_ACCOUNT', None)
+
+                        # Build lines: reverse accumulated depreciation, record proceeds, loss/gain
+                        lines = []
+                        # debit accumulated depreciation
+                        try:
+                            accum_acc = ChartOfAccount.objects.get(code=acc_accum) if acc_accum else None
+                            cost_acc = ChartOfAccount.objects.get(code=acc_cost) if acc_cost else None
+                            loss_acc = ChartOfAccount.objects.get(code=acc_loss) if acc_loss else None
+                            proceeds_acc = ChartOfAccount.objects.get(code=acc_proceeds) if acc_proceeds else None
+                        except Exception:
+                            accum_acc = cost_acc = loss_acc = proceeds_acc = None
+
+                        amt_accum = Decimal(str(nbv_reduction))
+                        amt_cost = Decimal(str(cost_reduction))
+                        amt_proceeds = Decimal(str(record.proceeds or 0))
+
+                        if accum_acc:
+                            lines.append({'account': accum_acc, 'description': f'Reverse accumulated depr {asset.assetCode}', 'debit': amt_accum, 'credit': Decimal('0.00')})
+                        if proceeds_acc and amt_proceeds > 0:
+                            lines.append({'account': proceeds_acc, 'description': f'Disposal proceeds {asset.assetCode}', 'debit': Decimal('0.00'), 'credit': amt_proceeds})
+                        # loss = cost less accumulated less proceeds
+                        loss_amt = amt_cost - amt_accum - amt_proceeds
+                        if loss_amt > 0 and loss_acc:
+                            lines.append({'account': loss_acc, 'description': f'Disposal loss {asset.assetCode}', 'debit': loss_amt, 'credit': Decimal('0.00')})
+
+                        if period and lines:
+                            voucher_ref = f'DISP{record.id}:{asset.assetCode}'
+                            _post_gl(period, record.disposal_date or timezone.now().date(), 'disposal', voucher_ref, f'Disposal {asset.assetCode}', lines)
+                            record.write_off_posted = True
+                            record.save()
+
+                # log status history
+                AssetStatusHistory.objects.create(
+                    asset=asset,
+                    from_status=asset.status,
+                    to_status=asset.status if asset.status == 'disposed' else 'active',
+                    changed_by=record.approved_by or '',
+                    reason=f'Disposal approved via committee {record.committee_reference or ""}'
+                )
+
+            except Exception as e:
+                return Response({'error': str(e)}, status=400)
+
+        return Response(AssetDisposalRecordSerializer(record).data, status=200)
+
 
 class FixedAssetListView(generics.ListCreateAPIView):
     """
@@ -1632,6 +1767,42 @@ class FixedAssetStatusTransitionView(APIView):
 
             old_status = asset.status
             asset.status = new_status
+            # If transitioning to deployed, set depreciation_start_date according to capitalization settings
+            if new_status == 'deployed' and not asset.depreciation_start_date:
+                try:
+                    cap = CapitalizationSetting.objects.first()
+                    from datetime import date
+                    if cap and cap.depreciation_start_rule:
+                        rule = cap.depreciation_start_rule
+                        start_src = asset.acq_date or asset.purchaseDate or date.today()
+                        if rule == 'date_of_acquisition':
+                            asset.depreciation_start_date = start_src
+                        elif rule == 'month_after_acquisition':
+                            # first day of next month after acquisition
+                            import datetime
+                            y = start_src.year
+                            m = start_src.month + 1
+                            if m > 12:
+                                m = 1
+                                y += 1
+                            asset.depreciation_start_date = datetime.date(y, m, 1)
+                        elif rule == 'quarter_after_acquisition':
+                            import datetime
+                            month = ((start_src.month - 1) // 3 + 1) * 3 + 1
+                            year = start_src.year
+                            if month > 12:
+                                month = 1
+                                year += 1
+                            asset.depreciation_start_date = datetime.date(year, month, 1)
+                        else:
+                            asset.depreciation_start_date = date.today()
+                    else:
+                        from datetime import date
+                        asset.depreciation_start_date = date.today()
+                except Exception:
+                    # do not block status transition on settings lookup failures
+                    pass
+
             asset.save()
 
             # Log status change
@@ -1736,6 +1907,21 @@ class FixedAssetDisposalView(APIView):
                 asset.status = 'disposed'
                 asset.save()
 
+                # Record disposal event for audit/reporting
+                try:
+                    from .models import AssetDisposalRecord
+                    AssetDisposalRecord.objects.create(
+                        asset=asset,
+                        disposed_qty=disposed_qty,
+                        disposal_value=disposal_value or 0,
+                        disposal_status=disposal_status,
+                        disposal_date=disposal_date,
+                        reason=disposal_reason,
+                        created_by=changed_by or '',
+                    )
+                except Exception:
+                    pass
+
                 # Log status change for original (from previous status → disposed)
                 AssetStatusHistory.objects.create(
                     asset=asset,
@@ -1768,6 +1954,21 @@ class FixedAssetDisposalView(APIView):
                 asset.disposal_reason = disposal_reason
                 asset.status = 'disposed'
                 asset.save()
+
+                # Record disposal event for audit/reporting
+                try:
+                    from .models import AssetDisposalRecord
+                    AssetDisposalRecord.objects.create(
+                        asset=asset,
+                        disposed_qty=asset.qty,
+                        disposal_value=disposal_value or 0,
+                        disposal_status=disposal_status,
+                        disposal_date=disposal_date,
+                        reason=disposal_reason,
+                        created_by=changed_by or '',
+                    )
+                except Exception:
+                    pass
 
                 AssetStatusHistory.objects.create(
                     asset=asset,
