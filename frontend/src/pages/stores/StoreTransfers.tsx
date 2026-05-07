@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/dialog";
 import { Search, Plus, ArrowLeftRight, Eye, ArrowRight, CheckCircle, Clock, Truck } from "lucide-react";
 import { api } from "@/services/api";
+import { inventoryService } from "@/services/inventory.service";
 import { StoreTransfer } from "@/mock/data";
 
 export default function StoreTransfers() {
@@ -304,9 +305,23 @@ export default function StoreTransfers() {
                     <TableCell className="text-right">{transfer.items}</TableCell>
                     <TableCell>{getStatusBadge(transfer.status)}</TableCell>
                     <TableCell className="text-right">
-                      <Button variant="ghost" size="icon" className="h-8 w-8">
-                        <Eye className="h-4 w-4" />
-                      </Button>
+                      <div className="flex items-center justify-end gap-2">
+                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                          <Eye className="h-4 w-4" />
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={async () => {
+                          try {
+                            // Build a simple transfer payload and post to S2
+                            await inventoryService.createS2Transfer({ ref_no: transfer.id, date: transfer.date, from: transfer.from, to: transfer.to, items: transfer.items, created_by: 'system' });
+                            toast.success('S2 Transfer posted');
+                          } catch (e: any) {
+                            const msg = `S2 transfer failed: ${e?.message || String(e)}`;
+                            console.warn(msg, e);
+                            toast.error('S2 Transfer Failed', { description: msg });
+                            try { const id = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`; await import('@/lib/s2Queue').then(m => m.enqueue({ id, type: 'TRANSFER', payload: { ref_no: transfer.id, date: transfer.date, from: transfer.from, to: transfer.to, items: transfer.items, created_by: 'system' } })); } catch(_){}
+                          }
+                        }}>Post S2</Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

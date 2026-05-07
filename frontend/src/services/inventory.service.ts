@@ -506,4 +506,72 @@ export const inventoryService = {
             return response.json();
         }
     }
+
+    ,
+
+    async createS2Transfer(payload: any): Promise<any> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            return { ok: true };
+        } else {
+            const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/s2/transfer/`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) throw new Error("Failed to post S2 transfer");
+            return response.json();
+        }
+    }
+
+    ,
+
+    async createS2Return(payload: any): Promise<any> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            return { ok: true };
+        } else {
+            const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/s2/return/`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) throw new Error("Failed to post S2 return");
+            return response.json();
+        }
+    }
+
+    ,
+
+    async createS2Damage(payload: any): Promise<any> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            return { ok: true };
+        } else {
+            const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/s2/damage/`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) throw new Error("Failed to post S2 damage");
+            return response.json();
+        }
+    }
+
+    ,
+
+    async reverseS2Transaction(id: string, payload?: any): Promise<any> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            return { ok: true };
+        } else {
+            const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/s2/reverse/`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id, ...payload }),
+            });
+            if (!response.ok) throw new Error("Failed to reverse S2 transaction");
+            return response.json();
+        }
+    }
 };

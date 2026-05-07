@@ -240,12 +240,20 @@ export default function ReceiveStock() {
               if (!itemId || qty <= 0) continue;
               try {
                 await api.createS2Receipt({ item_id: itemId, date: full.date || new Date().toISOString().split('T')[0], qty, unit_cost, supplier_name: full.supplier || full.supplierName || '', ref_no: full.lpoReference || full.reference || full.id, created_by: user?.name || 'system' });
-              } catch (e) {
-                console.warn('S2 receipt post failed for', itemId, e);
+              } catch (e: any) {
+                const msg = `S2 receipt failed for ${itemId}: ${e?.message || String(e)}`;
+                console.warn(msg, e);
+                toast.error("S2 Receipt Post Failed", { description: msg });
+                addNotification({ title: "S2 Receipt Failed", message: msg, type: "error", link: "/stores/receive" });
+                // enqueue for retry
+                try { const id = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`; await import("@/lib/s2Queue").then(m => m.enqueue({ id, type: 'RECEIPT', payload: { item_id: itemId, date: full.date || new Date().toISOString().split('T')[0], qty, unit_cost, supplier_name: full.supplier || full.supplierName || '', ref_no: full.lpoReference || full.reference || full.id, created_by: user?.name || 'system' } })); } catch(_){}
               }
             }
-          } catch (e) {
-            console.warn('Failed to post S2 receipts for S11', updatedRecord.id, e);
+          } catch (e: any) {
+            const msg = `Failed to post S2 receipts for S11 ${updatedRecord.id}: ${e?.message || String(e)}`;
+            console.warn(msg, e);
+            toast.error("S2 Receipts Batch Failed", { description: msg });
+            addNotification({ title: "S2 Receipts Batch Failed", message: msg, type: "error", link: "/stores/receive" });
           }
         })();
       }

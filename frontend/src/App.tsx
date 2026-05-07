@@ -9,6 +9,7 @@ import { AuditModeBanner } from "@/components/AuditModeBanner";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { HeaderActions } from "@/components/HeaderActions";
+import S2RetryQueue from "@/components/S2RetryQueue";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { NotificationProvider } from "@/contexts/NotificationContext";
 import { MessageProvider } from "@/contexts/MessageContext";
@@ -159,6 +160,7 @@ function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
             <UserLocationDisplay />
             <ThemeToggle />
             <HeaderActions />
+            <S2RetryQueue />
           </div>
         </header>
         <main className="flex-1 min-w-0 overflow-auto p-6">{children}</main>

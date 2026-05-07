@@ -162,13 +162,20 @@ export default function IssueStock() {
               const unit_cost = (inventoryItemsMap[itemCode]?.unitCost) || it.unitPrice || 0;
               try {
                 await api.createS2Issue({ item_id: itemCode, date: savedRecord.date || new Date().toISOString().split('T')[0], qty, unit_cost, custodian_id: '', custodian_name: '', dept_id: savedRecord.department, dept_name: savedRecord.department, ref_no: savedRecord.id, created_by: user?.name || 'system' });
-              } catch (e) {
-                console.warn('S2 issue post failed for', itemCode, e);
+              } catch (e: any) {
+                const msg = `S2 issue failed for ${itemCode}: ${e?.message || String(e)}`;
+                console.warn(msg, e);
+                toast.error("S2 Issue Post Failed", { description: msg });
+                addNotification({ title: "S2 Issue Failed", message: msg, type: "error", link: "/stores/issue" });
+                try { const id = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`; await import("@/lib/s2Queue").then(m => m.enqueue({ id, type: 'ISSUE', payload: { item_id: itemCode, date: savedRecord.date || new Date().toISOString().split('T')[0], qty, unit_cost, custodian_id: '', custodian_name: '', dept_id: savedRecord.department, dept_name: savedRecord.department, ref_no: savedRecord.id, created_by: user?.name || 'system' } })); } catch(_){}
               }
             }
           }
-        } catch (e) {
-          console.warn('Failed to post S2 issues after S13 creation', e);
+        } catch (e: any) {
+          const msg = `Failed to post S2 issues after S13 creation: ${e?.message || String(e)}`;
+          console.warn(msg, e);
+          toast.error("S2 Issues Batch Failed", { description: msg });
+          addNotification({ title: "S2 Issues Batch Failed", message: msg, type: "error", link: "/stores/issue" });
         }
       })();
 

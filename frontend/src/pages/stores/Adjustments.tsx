@@ -72,6 +72,38 @@ export default function Adjustments() {
       toast.success("Adjustment submitted for approval");
       setIsDialogOpen(false);
       setFormData({ item: '', type: '', qty: '', reason: '', remarks: '' });
+      // Best-effort: if this looks like a damage/loss adjustment, attempt S2 post
+      (async () => {
+        try {
+          const type = formData.type;
+          const reason = (formData.reason || '').toLowerCase();
+          const itemId = formData.item;
+          const qty = parseInt(formData.qty || '0', 10) || 0;
+          if (!itemId || qty <= 0) return;
+          if (type === 'Deduction' && (reason.includes('damag') || reason.includes('loss'))) {
+            try {
+              await import('@/services/inventory.service').then(s => s.inventoryService.createS2Damage({ item_id: itemId, date: new Date().toISOString().split('T')[0], qty, reason: formData.reason, created_by: 'system' }));
+            } catch (e: any) {
+              const msg = `S2 damage post failed for ${itemId}: ${e?.message || String(e)}`;
+              console.warn(msg, e);
+              toast.error("S2 Damage Post Failed", { description: msg });
+              try { const id = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`; await import('@/lib/s2Queue').then(m => m.enqueue({ id, type: 'DAMAGE', payload: { item_id: itemId, date: new Date().toISOString().split('T')[0], qty, reason: formData.reason, created_by: 'system' } })); } catch(_){}
+            }
+          }
+          if (type === 'Addition' && reason.includes('return')) {
+            try {
+              await import('@/services/inventory.service').then(s => s.inventoryService.createS2Return({ item_id: itemId, date: new Date().toISOString().split('T')[0], qty, reason: formData.reason, created_by: 'system' }));
+            } catch (e: any) {
+              const msg = `S2 return post failed for ${itemId}: ${e?.message || String(e)}`;
+              console.warn(msg, e);
+              toast.error("S2 Return Post Failed", { description: msg });
+              try { const id = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`; await import('@/lib/s2Queue').then(m => m.enqueue({ id, type: 'RETURN', payload: { item_id: itemId, date: new Date().toISOString().split('T')[0], qty, reason: formData.reason, created_by: 'system' } })); } catch(_){}
+            }
+          }
+        } catch (e) {
+          // ignore queue errors
+        }
+      })();
     },
     onError: () => {
       toast.error("Failed to create stock adjustment.");
