@@ -36,14 +36,22 @@ import { Search, Plus, Filter, Download, Edit, Eye, AlertTriangle } from "lucide
 import { toast } from "sonner";
 import { useReadOnlyGuard } from "@/hooks/useReadOnlyGuard";
 
-// Asset classification types
-type AssetType = "Consumable" | "Permanent" | "Fixed Asset";
+// Asset classification types (backend values)
+type ClassificationValue = 'consumable' | 'expendable' | 'permanent' | 'fixed_asset';
+
+const CLASSIFICATION_OPTIONS: { value: ClassificationValue; label: string }[] = [
+  { value: 'consumable', label: 'Consumable' },
+  { value: 'expendable', label: 'Expendable' },
+  { value: 'permanent', label: 'Permanent' },
+  { value: 'fixed_asset', label: 'Fixed Asset' },
+];
 
 interface Item {
   id: string;
   name: string;
   category: string;
-  assetType: AssetType;
+  assetType: string;
+  category_type?: ClassificationValue;
   unit: string;
   minimumStockLevel: number;
   reorderLevel: number;
@@ -105,7 +113,8 @@ export default function ItemMaster() {
   const [formData, setFormData] = useState({
     name: "",
     category: "",
-    assetType: "" as AssetType | "",
+    assetType: "",
+    categoryType: '' as ClassificationValue | '',
     unit: "",
     minimumStockLevel: "",
     reorderLevel: "",
@@ -134,6 +143,7 @@ export default function ItemMaster() {
       name: "",
       category: "",
       assetType: "",
+      categoryType: '' as ClassificationValue | '',
       unit: "",
       minimumStockLevel: "",
       reorderLevel: "",
@@ -166,7 +176,7 @@ export default function ItemMaster() {
     e?.preventDefault();
     e?.stopPropagation();
 
-    if (!formData.name || !formData.category || !formData.unit || !formData.assetType) {
+    if (!formData.name || !formData.category || !formData.unit || !formData.assetType || !formData.categoryType) {
       toast.error("Please fill in all required fields");
       return;
     }
@@ -218,7 +228,8 @@ export default function ItemMaster() {
     const newItemPayload: Omit<Item, "id"> = {
       name: formData.name,
       category: formData.category,
-      assetType: formData.assetType as AssetType,
+      assetType: formData.assetType,
+      category_type: formData.categoryType || 'consumable',
       unit: formData.unit,
       minimumStockLevel: minimumStockLevel,
       reorderLevel: reorderLevel,
@@ -277,7 +288,8 @@ export default function ItemMaster() {
     const updatedPayload: Partial<Item> = {
       name: formData.name,
       category: formData.category,
-      assetType: formData.assetType as AssetType,
+      assetType: formData.assetType,
+      category_type: formData.categoryType || undefined,
       unit: formData.unit,
       minimumStockLevel: minimumStockLevel,
       reorderLevel: reorderLevel,
@@ -322,6 +334,7 @@ export default function ItemMaster() {
       name: item.name,
       category: item.category,
       assetType: item.assetType,
+      categoryType: (item as any).category_type || '',
       unit: item.unit,
       minimumStockLevel: String(item.minimumStockLevel),
       reorderLevel: String(item.reorderLevel),
@@ -354,7 +367,7 @@ export default function ItemMaster() {
     }
   };
 
-  const getAssetTypeBadge = (assetType: AssetType) => {
+  const getAssetTypeBadge = (assetType: string) => {
     switch (assetType) {
       case "Consumable":
         return <Badge variant="outline" className="bg-info/10 text-info border-info/20">Consumable</Badge>;
@@ -436,18 +449,19 @@ export default function ItemMaster() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Item Code</TableHead>
-                  <TableHead>Item Name</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Unit</TableHead>
-                  <TableHead className="text-right">Min Level</TableHead>
-                  <TableHead className="text-right">Reorder Level</TableHead>
-                  <TableHead className="text-right">Current Bal.</TableHead>
-                  <TableHead>Expiry</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
+                    <TableHead>Item Code</TableHead>
+                    <TableHead>Item Name</TableHead>
+                    <TableHead>Classification</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Category</TableHead>
+                    <TableHead>Unit</TableHead>
+                    <TableHead className="text-right">Min Level</TableHead>
+                    <TableHead className="text-right">Reorder Level</TableHead>
+                    <TableHead className="text-right">Current Bal.</TableHead>
+                    <TableHead>Expiry</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredItems.length === 0 ? (
@@ -461,6 +475,7 @@ export default function ItemMaster() {
                     <TableRow key={item.id}>
                       <TableCell className="font-mono text-sm">{item.id}</TableCell>
                       <TableCell className="font-medium">{item.name}</TableCell>
+                      <TableCell>{item.category_type ? (CLASSIFICATION_OPTIONS.find(c => c.value === item.category_type)?.label ?? item.category_type) : '-'}</TableCell>
                       <TableCell>{getAssetTypeBadge(item.assetType)}</TableCell>
                       <TableCell>{item.category}</TableCell>
                       <TableCell>{item.unit}</TableCell>
@@ -543,10 +558,27 @@ export default function ItemMaster() {
                 </Select>
               </div>
               <div className="grid gap-2">
+                <Label htmlFor="classification">Classification *</Label>
+                <Select
+                  value={formData.categoryType || 'none'}
+                  onValueChange={(value) => setFormData({ ...formData, categoryType: value === 'none' ? '' : value as ClassificationValue })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select classification" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Select classification</SelectItem>
+                    {CLASSIFICATION_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
                 <Label htmlFor="assetType">Asset Type *</Label>
                 <Select
                   value={formData.assetType || "none"}
-                  onValueChange={(value) => setFormData({ ...formData, assetType: value === "none" ? "" : value as AssetType })}
+                  onValueChange={(value) => setFormData({ ...formData, assetType: value === "none" ? "" : value })}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select type" />

@@ -34,6 +34,12 @@ const INITIAL: Item[] = [
 
 const CATEGORIES = ["FOODSTUFF","STATIONERY","TEXTBOOKS","CHEMICALS","HYGIENE","FUEL","HARDWARE","OTHER"];
 const ASSET_TYPES = ["Consumable", "Expendable", "Permanent", "Fixed Asset"];
+const CLASS_MAP: Record<string, string> = {
+  consumable: 'Consumable',
+  expendable: 'Expendable',
+  permanent: 'Permanent',
+  fixed_asset: 'Fixed Asset'
+};
 const EMPTY = { code: "", name: "", category: "STATIONERY", unit: "Pcs", costPrice: "", qtyOnHand: "", reorderLevel: "", account: "1400", description: "", assetType: "" };
 
 export default function ItemMaster() {
@@ -113,7 +119,7 @@ export default function ItemMaster() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Code</TableHead><TableHead>Item Name</TableHead><TableHead>Category</TableHead>
+                <TableHead>Code</TableHead><TableHead>Item Name</TableHead><TableHead>Classification</TableHead><TableHead>Category</TableHead>
                 <TableHead>Asset Type</TableHead><TableHead>Unit</TableHead><TableHead className="text-right">Cost Price</TableHead>
                 <TableHead className="text-right">Qty on Hand</TableHead><TableHead className="text-right">Reorder</TableHead>
                 <TableHead className="text-right">Total Value</TableHead><TableHead>Status</TableHead>
@@ -132,6 +138,7 @@ export default function ItemMaster() {
                         {lowStock && <Badge className="bg-amber-100 text-amber-800 flex items-center gap-1"><AlertTriangle className="h-3 w-3" />Low</Badge>}
                       </div>
                     </TableCell>
+                    <TableCell><Badge variant="outline">{(item as any).category_type ? (CLASS_MAP[(item as any).category_type] || (item as any).category_type) : '-'}</Badge></TableCell>
                     <TableCell><Badge variant="outline">{item.category}</Badge></TableCell>
                     <TableCell className="text-sm">{item.assetType}</TableCell>
                     <TableCell className="text-sm">{item.unit}</TableCell>
