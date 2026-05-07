@@ -2150,6 +2150,8 @@ class AssetRegisterReportView(APIView):
     """GET /assets/reports/register/ - return the asset register as JSON"""
     def get(self, request, *args, **kwargs):
         from .models import FixedAsset
+        from io import BytesIO
+        import datetime
         assets = FixedAsset.objects.all().order_by('assetCode')
         rows = []
         for a in assets:
@@ -2166,7 +2168,77 @@ class AssetRegisterReportView(APIView):
                 'location': a.location,
                 'custodian': a.custodian,
             })
-        return Response({'count': len(rows), 'results': rows})
+        fmt = (request.query_params.get('format') or '').lower()
+        # JSON default
+        if fmt == '' or fmt == 'json':
+            return Response({'count': len(rows), 'results': rows})
+
+        # CSV
+        if fmt == 'csv':
+            import csv
+            response = HttpResponse(content_type='text/csv')
+            response['Content-Disposition'] = 'attachment; filename="fixed_asset_register.csv"'
+            writer = csv.writer(response)
+            writer.writerow(['Asset Code', 'Name', 'Category', 'Acquisition Date', 'Cost', 'NBV', 'Status', 'Department', 'Location', 'Custodian'])
+            for r in rows:
+                writer.writerow([r['assetCode'], r['name'], r['category'], r['acquisitionDate'] or '', r['cost'], r['nbv'], r['status'], r['dept'], r['location'], r['custodian']])
+            return response
+
+        # Excel (xlsx)
+        if fmt == 'excel' or fmt == 'xlsx':
+            try:
+                from openpyxl import Workbook
+            except Exception:
+                return Response({'error': 'openpyxl not installed'}, status=500)
+            wb = Workbook()
+            ws = wb.active
+            ws.title = 'Fixed Asset Register'
+            headers = ['Asset Code', 'Name', 'Category', 'Acquisition Date', 'Cost', 'NBV', 'Status', 'Department', 'Location', 'Custodian']
+            ws.append(headers)
+            for r in rows:
+                ws.append([r['assetCode'], r['name'], r['category'], r['acquisitionDate'] or '', r['cost'], r['nbv'], r['status'], r['dept'], r['location'], r['custodian']])
+            bio = BytesIO()
+            wb.save(bio)
+            bio.seek(0)
+            response = HttpResponse(bio.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            fname = f"fixed_asset_register_{datetime.date.today().isoformat()}.xlsx"
+            response['Content-Disposition'] = f'attachment; filename="{fname}"'
+            return response
+
+        # PDF
+        if fmt == 'pdf':
+            try:
+                from reportlab.lib.pagesizes import A4, landscape
+                from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+                from reportlab.lib import colors
+                from reportlab.lib.styles import getSampleStyleSheet
+            except Exception:
+                return Response({'error': 'reportlab not installed'}, status=500)
+
+            bio = BytesIO()
+            doc = SimpleDocTemplate(bio, pagesize=landscape(A4))
+            data = [['Asset Code', 'Name', 'Category', 'Acquisition Date', 'Cost', 'NBV', 'Status', 'Department', 'Location', 'Custodian']]
+            for r in rows:
+                data.append([r['assetCode'], r['name'], r['category'], r['acquisitionDate'] or '', str(r['cost']), str(r['nbv']), r['status'], r['dept'], r['location'], r['custodian']])
+            table = Table(data, repeatRows=1)
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.grey),
+                ('TEXTCOLOR',(0,0),(-1,0),colors.whitesmoke),
+                ('ALIGN',(0,0),(-1,-1),'LEFT'),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0,0), (-1,0), 10),
+                ('BOTTOMPADDING', (0,0), (-1,0), 6),
+                ('GRID', (0,0), (-1,-1), 0.25, colors.black),
+            ]))
+            styles = getSampleStyleSheet()
+            elems = [Paragraph('Fixed Asset Register', styles['Heading2']), table]
+            doc.build(elems)
+            bio.seek(0)
+            response = HttpResponse(bio.read(), content_type='application/pdf')
+            response['Content-Disposition'] = 'attachment; filename="fixed_asset_register.pdf"'
+            return response
+
+        return Response({'error': 'unsupported format'}, status=400)
 
 
 class DepreciationScheduleView(APIView):

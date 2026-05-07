@@ -3,11 +3,15 @@ import { assetsService } from '@/services/assets.service';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { toast } from 'sonner';
+import { listAttachments } from '@/services/attachments.service';
+import { Link } from 'react-router-dom';
 
 export default function BulkPrompts() {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
+  const [groupPrompts, setGroupPrompts] = useState<Record<string, any[]>>({});
+  const [attachmentsMap, setAttachmentsMap] = useState<Record<string, any[]>>({});
   const [createChildren, setCreateChildren] = useState(false);
   const [childTagPrefix, setChildTagPrefix] = useState('');
   const [groupName, setGroupName] = useState('');
@@ -44,6 +48,27 @@ export default function BulkPrompts() {
     }
   }
 
+  async function viewGroup(group: string) {
+    setSelectedGroup(group);
+    // find group's prompts from last loaded data
+    try {
+      const res = await fetch('/api/storekeeper/stores/capitalization/prompts/pending/');
+      const json = await res.json();
+      const prompts = (json.results || []).filter((p: any) => (p.bulk_group_ref || 'NO-GROUP') === group);
+      setGroupPrompts((m) => ({ ...m, [group]: prompts }));
+      const map: Record<string, any[]> = {};
+      await Promise.all(prompts.map(async (p: any) => {
+        try {
+          const a = await listAttachments('capitalization_prompt', p.id);
+          map[p.id] = a.results || [];
+        } catch (e) { map[p.id] = []; }
+      }));
+      setAttachmentsMap(map);
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
   return (
     <div>
       <h2 className="text-lg font-medium">Bulk Prompts</h2>
@@ -74,7 +99,7 @@ export default function BulkPrompts() {
                   <TableCell>
                     <div className="flex gap-2">
                       <Button onClick={() => approve(g.group)}>Approve & Create</Button>
-                      <Button variant="ghost" onClick={() => setSelectedGroup(g.group)}>View</Button>
+                      <Button variant="ghost" onClick={() => viewGroup(g.group)}>View</Button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -84,7 +109,34 @@ export default function BulkPrompts() {
           {selectedGroup && (
             <div className="mt-4">
               <h3>Group: {selectedGroup}</h3>
-              <pre className="p-2 border mt-2">Details can be viewed in the Prompts list.</pre>
+              <div className="mt-2">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Prompt</TableHead>
+                      <TableHead>Item</TableHead>
+                      <TableHead>Decision</TableHead>
+                      <TableHead>Qty</TableHead>
+                      <TableHead>Total</TableHead>
+                      <TableHead>Attachments</TableHead>
+                      <TableHead>Detail</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(groupPrompts[selectedGroup] || []).map((p:any) => (
+                      <TableRow key={p.id}>
+                        <TableCell>{p.id}</TableCell>
+                        <TableCell>{p.item_name}</TableCell>
+                        <TableCell>{p.override_decision || p.suggested_action}</TableCell>
+                        <TableCell>{p.quantity}</TableCell>
+                        <TableCell>{p.total_value}</TableCell>
+                        <TableCell>{(attachmentsMap[p.id]||[]).length}</TableCell>
+                        <TableCell><Link to={`/assets/prompt/${encodeURIComponent(p.id)}`} className="text-blue-600 underline">Open</Link></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             </div>
           )}
         </div>

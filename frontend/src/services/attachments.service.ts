@@ -24,3 +24,14 @@ export const attachmentsService = {
         return response.json();
     }
 }
+
+export async function listAttachments(entityType: string, entityId: string, page = 1, page_size = 25) {
+    const params = new URLSearchParams();
+    params.set('entity_type', entityType);
+    params.set('entity_id', entityId);
+    params.set('page', String(page));
+    params.set('page_size', String(page_size));
+    const res = await fetch(`/api/v1/messages/attachments/?${params.toString()}`);
+    if (!res.ok) throw new Error('Failed to list attachments');
+    return res.json();
+}

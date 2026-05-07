@@ -6,6 +6,7 @@ from .views import (
     ToggleStarView, DeleteMessageView,
     UnreadCountView, ThreadView,
     AttachmentUploadView,
+    AuditLogListView,
 )
 
 urlpatterns = [
@@ -21,4 +22,5 @@ urlpatterns = [
     path('<int:pk>/star/', ToggleStarView.as_view(), name='messages-toggle-star'),
     path('<int:pk>/delete/', DeleteMessageView.as_view(), name='messages-delete'),
     path('attachments/', AttachmentUploadView.as_view(), name='messages-attachments'),
+    path('audit/', AuditLogListView.as_view(), name='messages-audit'),
 ]

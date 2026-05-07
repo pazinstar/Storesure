@@ -82,8 +82,10 @@ import AssetMovement from "./pages/assets/AssetMovement";
 import BoardOfSurvey from "./pages/assets/BoardOfSurvey";
 import Disposal from "./pages/assets/Disposal";
 import AssetReports from "./pages/assets/AssetReports";
+import FixedAssetRegister from "./pages/assets/FixedAssetRegister";
 import BulkCapitalization from "./pages/assets/BulkCapitalization";
 import BulkPrompts from "./pages/assets/BulkPrompts";
+import PromptDetail from "./pages/assets/PromptDetail";
 import CapitalizationSettings from "./pages/assets/CapitalizationSettings";
 import SingleClassify from "./pages/assets/SingleClassify";
 
@@ -648,6 +650,16 @@ const App = () => (
                                             }
                                           />
                                           <Route
+                                            path="/assets/prompt/:id"
+                                            element={
+                                              <ProtectedRoute>
+                                                <AuthenticatedLayout>
+                                                  <PromptDetail />
+                                                </AuthenticatedLayout>
+                                              </ProtectedRoute>
+                                            }
+                                          />
+                                          <Route
                                             path="/assets/classify"
                                             element={
                                               <ProtectedRoute>
@@ -663,6 +675,16 @@ const App = () => (
                                               <ProtectedRoute>
                                                 <AuthenticatedLayout>
                                                   <AssetReports />
+                                                </AuthenticatedLayout>
+                                              </ProtectedRoute>
+                                            }
+                                          />
+                                          <Route
+                                            path="/assets/reports/fixed-register"
+                                            element={
+                                              <ProtectedRoute>
+                                                <AuthenticatedLayout>
+                                                  <FixedAssetRegister />
                                                 </AuthenticatedLayout>
                                               </ProtectedRoute>
                                             }

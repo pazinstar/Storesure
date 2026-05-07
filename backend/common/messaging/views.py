@@ -288,3 +288,103 @@ class AttachmentUploadView(APIView):
             'uploaded_by': att.uploaded_by,
             'uploaded_at': att.uploaded_at,
         }, status=status.HTTP_201_CREATED)
+
+    def get(self, request):
+        """List attachments filtered by `entity_type` and `entity_id` query params."""
+        from .models import DocumentAttachment
+        entity_type = request.query_params.get('entity_type')
+        entity_id = request.query_params.get('entity_id')
+        if not entity_type or not entity_id:
+            return Response({'error': 'entity_type and entity_id are required'}, status=status.HTTP_400_BAD_REQUEST)
+        atts_qs = DocumentAttachment.objects.filter(entity_type__iexact=entity_type, entity_id=str(entity_id), is_active=True).order_by('-uploaded_at')
+
+        # pagination parameters
+        try:
+            page = int(request.query_params.get('page', 1))
+            page_size = int(request.query_params.get('page_size', 25))
+        except Exception:
+            page = 1
+            page_size = 25
+
+        total = atts_qs.count()
+        start = (page - 1) * page_size
+        end = start + page_size
+        page_objs = atts_qs[start:end]
+
+        data = []
+        for a in page_objs:
+            try:
+                url = default_storage.url(a.file_path)
+            except Exception:
+                url = a.file_path
+            data.append({
+                'id': a.id,
+                'file_path': a.file_path,
+                'url': url,
+                'doc_type': a.doc_type,
+                'uploaded_by': a.uploaded_by,
+                'uploaded_at': a.uploaded_at,
+            })
+
+        base = request.build_absolute_uri(request.path)
+        def page_url(p):
+            return f"{base}?entity_type={entity_type}&entity_id={entity_id}&page={p}&page_size={page_size}"
+
+        return Response({
+            'count': total,
+            'page': page,
+            'page_size': page_size,
+            'next': page * page_size < total and page_url(page + 1) or None,
+            'previous': page > 1 and page_url(page - 1) or None,
+            'results': data,
+        })
+
+
+class AuditLogListView(APIView):
+    """GET /api/v1/messages/audit/?entity=...&entity_id=... - list AuditLog entries."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from .models import AuditLog
+        entity = request.query_params.get('entity')
+        entity_id = request.query_params.get('entity_id')
+        if not entity or not entity_id:
+            return Response({'error': 'entity and entity_id are required'}, status=status.HTTP_400_BAD_REQUEST)
+        qs = AuditLog.objects.filter(entity__iexact=entity, entity_id=str(entity_id)).order_by('-timestamp')
+
+        try:
+            page = int(request.query_params.get('page', 1))
+            page_size = int(request.query_params.get('page_size', 25))
+        except Exception:
+            page = 1
+            page_size = 25
+
+        total = qs.count()
+        start = (page - 1) * page_size
+        end = start + page_size
+        objs = qs[start:end]
+
+        data = [
+            {
+                'id': l.id,
+                'action': l.action,
+                'user_id': l.user_id,
+                'old_values': l.old_values,
+                'new_values': l.new_values,
+                'timestamp': l.timestamp,
+            }
+            for l in objs
+        ]
+
+        base = request.build_absolute_uri(request.path)
+        def page_url(p):
+            return f"{base}?entity={entity}&entity_id={entity_id}&page={p}&page_size={page_size}"
+
+        return Response({
+            'count': total,
+            'page': page,
+            'page_size': page_size,
+            'next': page * page_size < total and page_url(page + 1) or None,
+            'previous': page > 1 and page_url(page - 1) or None,
+            'results': data,
+        })
