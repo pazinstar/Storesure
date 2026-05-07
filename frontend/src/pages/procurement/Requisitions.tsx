@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { procurementService } from "@/services/procurement.service";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
 import { PurchaseRequisition, PurchaseRequisitionStatus } from "@/mock/data";
@@ -277,9 +278,9 @@ const Requisitions = () => {
     doApprove();
   };
 
-  const [approvalError, setApprovalError] = React.useState<string>("");
-  const [attachmentFile, setAttachmentFile] = React.useState<File | null>(null);
-  const [uploadingAttachment, setUploadingAttachment] = React.useState(false);
+  const [approvalError, setApprovalError] = useState<string>("");
+  const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
 
   const handleUploadAttachment = async (req: PurchaseRequisition) => {
     if (!attachmentFile) return toast.error("Please select a file to upload");
@@ -770,6 +771,24 @@ const Requisitions = () => {
                 </div>
 
                 <Separator />
+
+                {approvalError && (
+                  <div className="p-3 bg-yellow-50 border border-yellow-200 rounded space-y-2">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="h-4 w-4 text-yellow-600 mt-1" />
+                      <div>
+                        <p className="text-sm font-medium">Approval Error</p>
+                        <p className="text-sm text-muted-foreground">{approvalError}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input type="file" onChange={(e) => setAttachmentFile(e.target.files?.[0] ?? null)} />
+                      <Button onClick={() => selectedRequisition && handleUploadAttachment(selectedRequisition)} disabled={uploadingAttachment}>
+                        {uploadingAttachment ? 'Uploading...' : 'Upload & Approve'}
+                      </Button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Details */}
                 <div className="grid grid-cols-2 gap-4 text-sm">
