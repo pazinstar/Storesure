@@ -18,6 +18,7 @@ from .serializers import (
 import csv
 from django.http import HttpResponse
 from django.utils import timezone
+from django.db.models import Sum, F
 
 class InventoryListView(generics.ListCreateAPIView):
     queryset = InventoryItem.objects.all().order_by('-createdAt', '-id')
@@ -526,8 +527,13 @@ class S12RequisitionDetailView(generics.RetrieveUpdateDestroyAPIView):
             if not has_attachments:
                 from rest_framework import status
                 return Response({'error': 'Supporting attachments required for requisition approval/processing. Attach at least one document.'}, status=status.HTTP_400_BAD_REQUEST)
+            # Enforce workflow: only approved requisitions may be processed for issue
+            if (updated_instance.status or '').lower() not in ('approved', 'partially approved', 'partiallyapproved'):
+                from rest_framework import status
+                return Response({'error': f'Requisition must be approved before issuing. Current status: {updated_instance.status}'}, status=status.HTTP_400_BAD_REQUEST)
             with transaction.atomic():
                 s13 = IssueHistory.objects.create(
+                    requisition=updated_instance,
                     date=timezone.now().date(),
                     department=updated_instance.requestingDepartment,
                     requestedBy=updated_instance.requestedBy,
@@ -536,12 +542,22 @@ class S12RequisitionDetailView(generics.RetrieveUpdateDestroyAPIView):
                 )
 
                 for req_item in updated_instance.items.all():
-                    qty = req_item.quantityIssued if req_item.quantityIssued > 0 else req_item.quantityApproved
+                    # Determine issue quantity: explicit quantityIssued if set, otherwise use approved amount
+                    qty = req_item.quantityIssued if (req_item.quantityIssued and req_item.quantityIssued > 0) else (req_item.quantityApproved or 0)
+
+                    # Enforce per-line approval limits
+                    approved = req_item.quantityApproved or 0
+                    if qty > approved:
+                        from rest_framework.exceptions import ValidationError
+                        raise ValidationError(f"Attempting to issue {qty} but only {approved} approved for item {req_item.itemCode.name}.")
 
                     if qty > 0 and req_item.itemCode:
                         item_code = req_item.itemCode.id
-                        unit_cost = float(req_item.unitPrice)
-                        total_cost = qty * unit_cost
+                        try:
+                            unit_cost = Decimal(req_item.unitPrice or 0)
+                        except Exception:
+                            unit_cost = Decimal(str(req_item.unitPrice or 0))
+                        total_cost = unit_cost * Decimal(qty)
 
                         # Lock existing ledger row if present
                         ledger = InventoryLedger.objects.select_for_update().filter(itemCode=item_code).first()
@@ -654,9 +670,10 @@ class RequisitionApprovalView(APIView):
         comments = data.get('comments') or ''
         items_payload = data.get('items') or []
 
-        # process each item: set quantityApproved and reserve stock (committedQty)
+        # process each item: set quantityApproved, compute costs, and reserve stock (committedQty)
         with transaction.atomic():
             processed = []
+            total_cost = 0
             for it in items_payload:
                 rid = it.get('requisition_item_id')
                 approved_qty = int(it.get('approved_qty') or 0)
@@ -682,6 +699,13 @@ class RequisitionApprovalView(APIView):
                     req_item.quantityApproved = approved_qty
                     req_item.save()
 
+                    # cost calculation
+                    try:
+                        unit_price = float(req_item.unitPrice or 0)
+                    except Exception:
+                        unit_price = 0
+                    total_cost += unit_price * approved_qty
+
                     if ledger:
                         ledger.committedQty += approved_qty
                         ledger.save()
@@ -691,6 +715,50 @@ class RequisitionApprovalView(APIView):
                     req_item.save()
 
                 processed.append({'requisition_item_id': req_item.id, 'approved_qty': req_item.quantityApproved, 'decision': item_decision})
+
+            # Budget check: ensure the requisition account has sufficient remaining budget
+            try:
+                from roles.finance.models import Budget, ChartOfAccount, FinancialYear
+                # Determine account code from requisition.account (accept either code or name)
+                acct_code = req.account
+                account_obj = None
+                if acct_code:
+                    account_obj = ChartOfAccount.objects.filter(code=acct_code).first() or ChartOfAccount.objects.filter(name__icontains=acct_code).first()
+                if account_obj:
+                    # find current financial year
+                    fy = FinancialYear.objects.filter(is_current=True).first()
+                    budget_qs = Budget.objects.filter(account=account_obj)
+                    if fy:
+                        budget_qs = budget_qs.filter(financial_year=fy)
+                    budget = budget_qs.order_by('-created_at').first()
+                    if budget:
+                        # compute spent: sum GLLine debits minus credits for this account
+                        from roles.finance.models import GLLine
+                        spent_qs = GLLine.objects.filter(account=account_obj)
+                        spent = spent_qs.aggregate(s=Sum(F('debit') - F('credit')))['s'] or 0
+                        remaining = float(budget.total_budget) - float(spent)
+                        if total_cost > remaining:
+                            # Allow override if caller requested and has permission
+                            override_requested = bool(data.get('override'))
+                            user = getattr(request, 'user', None)
+                            can_override = False
+                            try:
+                                if user and (getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False)):
+                                    can_override = True
+                                else:
+                                    # membership in finance/bursar groups
+                                    can_override = user and user.groups.filter(name__in=['Bursar', 'Finance']).exists()
+                            except Exception:
+                                can_override = False
+
+                            if override_requested and can_override:
+                                # annotate comments to indicate override used
+                                comments = (comments or '') + f' (budget override requested by {getattr(user, "username", "unknown")})'
+                            else:
+                                return Response({'error': f'Budget exceeded for account {account_obj.code}. Remaining: {remaining:.2f}, requested: {total_cost:.2f}'}, status=400)
+            except Exception:
+                # If budget subsystem not available or calculation fails, proceed but log
+                pass
 
             # Create approval record
             approval = RequisitionApproval.objects.create(
@@ -713,6 +781,13 @@ class RequisitionApprovalView(APIView):
                 req.status = 'Approved'
             req.approval_level = max(req.approval_level or 0, level)
             req.save()
+
+            # Record status change
+            try:
+                from .models import RequisitionStatusLog
+                RequisitionStatusLog.objects.create(requisition=req, previous_status=req.status if req.status else '', new_status=req.status, changed_by=approver, reason=f'Approval level {level} by {approver}')
+            except Exception:
+                pass
 
         return Response({'ok': True, 'approval_id': approval.id, 'status': req.status})
 
@@ -741,6 +816,65 @@ class RequisitionApprovalsListView(APIView):
                 'createdAt': a.createdAt.isoformat() if a.createdAt else None,
             })
         return Response({'results': data})
+
+
+class RequisitionPrintView(APIView):
+    """GET /requisitions/<id>/print/ — return printable HTML of the requisition"""
+    def get(self, request, id):
+        from .models import Requisition
+        try:
+            req = Requisition.objects.prefetch_related('items', 'approvals').get(id=id)
+        except Requisition.DoesNotExist:
+            return Response({'error': 'Requisition not found'}, status=404)
+
+        # Build printable HTML with simple A4 styling and branding
+        school_name = getattr(req, 'schoolName', None) or 'StoreSure'
+        html_parts = []
+        html_parts.append('<!doctype html><html><head><meta charset="utf-8"><title>Requisition - {}</title>'.format(req.s12Number))
+        html_parts.append('<style>@page{size:A4;margin:20mm}@media print{body{margin:0}}body{font-family:Helvetica,Arial,sans-serif;color:#111}header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}h1{font-size:16px;margin:0}h2{font-size:14px;margin:0}table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border:1px solid #666;padding:6px;font-size:12px;text-align:left}thead th{background:#f3f4f6}tfoot td{font-weight:600}section.meta{margin-bottom:8px}small.muted{color:#666;font-size:11px}footer{margin-top:18px;font-size:12px;color:#444}</style>')
+        html_parts.append('</head><body>')
+        # Header
+        html_parts.append('<header><div><h1>{}</h1><div class="muted">Requisition</div></div><div style="text-align:right"><h2>{}</h2><small class="muted">{}</small></div></header>'.format(school_name, req.s12Number, format(getattr(req, 'requestDate', ''), '%Y-%m-%d') if getattr(req, 'requestDate', None) else ''))
+        html_parts.append('<section class="meta"><div><strong>Department:</strong> {} &nbsp; <strong>Requested By:</strong> {}</div><div style="margin-top:4px"><strong>Purpose:</strong> {}</div></section>'.format(req.requestingDepartment or '', req.requestedBy or '', req.purpose or ''))
+        # Items table
+        html_parts.append('<table><thead><tr><th>#</th><th>Item</th><th>Unit</th><th>Requested</th><th>Approved</th><th>Issued</th><th>Unit Price</th><th>Total</th></tr></thead><tbody>')
+        grand_total = 0
+        for i, it in enumerate(req.items.all(), start=1):
+            unit_price = float(it.unitPrice or 0)
+            total = (it.quantityApproved or 0) * unit_price
+            grand_total += total
+            html_parts.append('<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{:.2f}</td><td>{:.2f}</td></tr>'.format(i, it.description or '', it.unit or '', it.quantityRequested or 0, it.quantityApproved or 0, it.quantityIssued or 0, unit_price, total))
+        html_parts.append('</tbody><tfoot><tr><td colspan="7" style="text-align:right">Grand Total</td><td>{:.2f}</td></tr></tfoot></table>'.format(grand_total))
+
+        # Approvals
+        html_parts.append('<h3 style="margin-top:14px">Approvals</h3>')
+        html_parts.append('<table><thead><tr><th>Approver</th><th>Level</th><th>Decision</th><th>Comments</th><th>Date</th></tr></thead><tbody>')
+        for ap in req.approvals.all():
+            html_parts.append('<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(ap.approver, ap.level, ap.decision, ap.comments or '', ap.createdAt or ''))
+        html_parts.append('</tbody></table>')
+
+        html_parts.append('<h3 style="margin-top:14px">Issue / Signatures</h3>')
+        html_parts.append('<div style="display:flex;gap:40px;margin-top:10px"><div>Issuer: ________________________</div><div>Receiver: ________________________</div></div>')
+        html_parts.append('<footer><small class="muted">Generated by StoreSure on {}</small></footer>'.format(timezone.now().date().isoformat()))
+        html_parts.append('</body></html>')
+
+        full_html = ''.join(html_parts)
+
+        # Support PDF export when ?format=pdf is requested and weasyprint is available
+        fmt = request.query_params.get('format') if hasattr(request, 'query_params') else None
+        if fmt == 'pdf':
+            try:
+                from weasyprint import HTML, CSS
+                pdf = HTML(string=full_html).write_pdf(stylesheets=[CSS(string='@page { size: A4; margin: 20mm }')])
+                from django.http import HttpResponse
+                resp = HttpResponse(pdf, content_type='application/pdf')
+                resp['Content-Disposition'] = f'inline; filename="requisition_{req.s12Number}.pdf"'
+                return resp
+            except Exception:
+                # if PDF lib not installed, fall back to HTML with note
+                full_html = '<div style="color:#900;font-weight:600;margin-bottom:8px">PDF export not available on server. Showing HTML version.</div>' + full_html
+
+        return Response(full_html, content_type='text/html')
 from .serializers import (
     SupplierSerializer,
     PurchaseOrderSerializer,

@@ -192,6 +192,8 @@ class Requisition(models.Model):
     issuerSignature = models.BooleanField(default=False)
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
+    createdBy = models.CharField(max_length=255, blank=True, default='')
+    updatedBy = models.CharField(max_length=255, blank=True, default='')
     
     def save(self, *args, **kwargs):
         if not self.id:
@@ -252,6 +254,7 @@ class RequisitionItem(models.Model):
 
 class IssueHistory(models.Model):
     id = models.CharField(max_length=50, primary_key=True, blank=True) # S13-2024-001
+    requisition = models.ForeignKey('Requisition', related_name='issues', on_delete=models.SET_NULL, blank=True, null=True)
     date = models.DateField()
     department = models.CharField(max_length=255)
     requestedBy = models.CharField(max_length=255)
@@ -584,6 +587,19 @@ class RequisitionApproval(models.Model):
 
     def __str__(self):
         return f"Approval {self.id} for {self.requisition.s12Number} by {self.approver}"
+
+
+class RequisitionStatusLog(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    requisition = models.ForeignKey(Requisition, related_name='status_logs', on_delete=models.CASCADE)
+    previous_status = models.CharField(max_length=100)
+    new_status = models.CharField(max_length=100)
+    changed_by = models.CharField(max_length=255)
+    reason = models.TextField(blank=True, default='')
+    createdAt = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Status {self.previous_status} → {self.new_status} for {self.requisition.s12Number}"
 
 class StoreReport(models.Model):
     id = models.BigAutoField(primary_key=True)

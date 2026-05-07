@@ -108,6 +108,7 @@ class RequisitionSerializer(serializers.ModelSerializer):
 class S12RequisitionSerializer(serializers.ModelSerializer):
     items = RequisitionItemSerializer(many=True, required=False)
     approvals = serializers.SerializerMethodField(read_only=True)
+    status_logs = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Requisition
@@ -125,6 +126,10 @@ class S12RequisitionSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])
+        request = self.context.get('request') if self.context else None
+        if request and getattr(request, 'user', None) and not request.user.is_anonymous:
+            validated_data['createdBy'] = request.user.get_full_name() or getattr(request.user, 'username', str(request.user))
+            validated_data['updatedBy'] = validated_data.get('createdBy')
         requisition = Requisition.objects.create(**validated_data)
         for item_data in items_data:
             from .models import RequisitionItem
@@ -133,10 +138,23 @@ class S12RequisitionSerializer(serializers.ModelSerializer):
         
     def update(self, instance, validated_data):
         items_data = validated_data.pop('items', None)
-        
+        request = self.context.get('request') if self.context else None
+        if request and getattr(request, 'user', None) and not request.user.is_anonymous:
+            validated_data['updatedBy'] = request.user.get_full_name() or getattr(request.user, 'username', str(request.user))
+
+        previous_status = instance.status
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
+
+        # Record status change
+        try:
+            if 'status' in validated_data and validated_data.get('status') != previous_status:
+                from .models import RequisitionStatusLog
+                changed_by = validated_data.get('updatedBy') or (request.user.get_full_name() if request and getattr(request, 'user', None) else 'system')
+                RequisitionStatusLog.objects.create(requisition=instance, previous_status=previous_status or '', new_status=validated_data.get('status'), changed_by=changed_by)
+        except Exception:
+            pass
         
         if items_data is not None:
             from .models import RequisitionItem
@@ -157,6 +175,13 @@ class S12RequisitionSerializer(serializers.ModelSerializer):
             from .models import RequisitionApproval
             approvals = RequisitionApproval.objects.filter(requisition=obj).order_by('-createdAt')
             return RequisitionApprovalSerializer(approvals, many=True).data
+        except Exception:
+            return []
+
+    def get_status_logs(self, obj):
+        try:
+            logs = obj.status_logs.order_by('-createdAt')
+            return [{'previous_status': l.previous_status, 'new_status': l.new_status, 'changed_by': l.changed_by, 'createdAt': l.createdAt.isoformat()} for l in logs]
         except Exception:
             return []
 

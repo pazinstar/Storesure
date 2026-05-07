@@ -119,6 +119,7 @@ export default function S12Requisition() {
   const [approvalRemarks, setApprovalRemarks] = useState("");
   const [approvedQuantities, setApprovedQuantities] = useState<Record<string, number>>({});
   const [issuedQuantities, setIssuedQuantities] = useState<Record<string, number>>({});
+  const [overrideApproval, setOverrideApproval] = useState(false);
 
   const getStatusBadge = (status: S12Status) => {
     const variants: Record<S12Status, "default" | "secondary" | "destructive" | "outline"> = {
@@ -188,6 +189,7 @@ export default function S12Requisition() {
         level: 1,
         decision: "approved",
         comments: approvalRemarks,
+        override: overrideApproval,
         items: Object.keys(quantities).map((k) => ({ requisition_item_id: k, approved_qty: quantities[k], decision: quantities[k] > 0 ? 'approved' : 'rejected' })),
       })
       .then((res) => {
@@ -848,18 +850,31 @@ export default function S12Requisition() {
                 </div>
               </div>
 
-              {selectedRequisition.status === "Fully Issued" &&
-                !selectedRequisition.receiverSignature && (
-                  <Button
-                    className="w-full"
-                    onClick={() => {
-                      handleConfirmReceipt(selectedRequisition);
-                      setViewDialogOpen(false);
-                    }}
-                  >
-                    Confirm Receipt
-                  </Button>
-                )}
+              <div className="flex gap-2 pt-4">
+                {selectedRequisition.status === "Fully Issued" &&
+                  !selectedRequisition.receiverSignature && (
+                    <Button
+                      className=""
+                      onClick={() => {
+                        handleConfirmReceipt(selectedRequisition);
+                        setViewDialogOpen(false);
+                      }}
+                    >
+                      Confirm Receipt
+                    </Button>
+                  )}
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (!selectedRequisition) return;
+                    const url = `/api/v1/storekeeper/stores/requisitions/${selectedRequisition.id}/print/`;
+                    window.open(url, '_blank');
+                  }}
+                >
+                  <FileText className="mr-2 h-4 w-4" />
+                  Print
+                </Button>
+              </div>
             </div>
           )}
         </DialogContent>
@@ -936,6 +951,16 @@ export default function S12Requisition() {
                   onChange={(e) => setApprovalRemarks(e.target.value)}
                   placeholder="Enter approval/rejection remarks"
                 />
+                <div className="flex items-center gap-2">
+                  <input
+                    id="overrideApproval"
+                    type="checkbox"
+                    checked={overrideApproval}
+                    onChange={(e) => setOverrideApproval(e.target.checked)}
+                    className="w-4 h-4"
+                  />
+                  <label htmlFor="overrideApproval" className="text-sm">Request budget override (requires permission)</label>
+                </div>
               </div>
             </div>
           )}
