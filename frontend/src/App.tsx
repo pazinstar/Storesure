@@ -44,6 +44,7 @@ import StoreDashboard from "./pages/stores/StoreDashboard";
 import ItemMaster from "./pages/stores/ItemMaster";
 import ReceiveStock from "./pages/stores/ReceiveStock";
 import IssueStock from "./pages/stores/IssueStock";
+import IssueDetail from "./pages/stores/IssueDetail";
 import StockBalances from "./pages/stores/StockBalances";
 import Adjustments from "./pages/stores/Adjustments";
 import StoreTransfers from "./pages/stores/StoreTransfers";
@@ -443,6 +444,16 @@ const App = () => (
                                               <ProtectedRoute>
                                                 <AuthenticatedLayout>
                                                   <IssueStock />
+                                                </AuthenticatedLayout>
+                                              </ProtectedRoute>
+                                            }
+                                          />
+                                          <Route
+                                            path="/stores/issue/:id"
+                                            element={
+                                              <ProtectedRoute>
+                                                <AuthenticatedLayout>
+                                                  <IssueDetail />
                                                 </AuthenticatedLayout>
                                               </ProtectedRoute>
                                             }

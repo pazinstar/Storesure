@@ -42,6 +42,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { Link } from "react-router-dom";
+import { formatISO, parseISO } from "date-fns";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useS12, S12Requisition as S12RequisitionType, S12Item, S12Status } from "@/contexts/S12Context";
@@ -848,6 +850,28 @@ export default function S12Requisition() {
                   )}
                   <span className="text-sm">Receiver Signature</span>
                 </div>
+              </div>
+
+              {/* S13 / Issue history */}
+              <div className="pt-4">
+                <Label className="text-muted-foreground">Linked S13 (Issues)</Label>
+                {selectedRequisition.issues && selectedRequisition.issues.length > 0 ? (
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {selectedRequisition.issues.map((s13: any) => (
+                      <Link key={s13.id} to={`/stores/issue/${s13.id}`} className="no-underline">
+                        <div className="flex items-center gap-2">
+                          <Badge>{s13.id}</Badge>
+                          <div className="text-xs text-muted-foreground">
+                            {s13.createdAt ? new Date(s13.createdAt).toLocaleString() : (s13.date ? s13.date : '')}
+                            {s13.items ? ` • ${s13.items} items` : ''}
+                          </div>
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground mt-2">No issues recorded</p>
+                )}
               </div>
 
               <div className="flex gap-2 pt-4">

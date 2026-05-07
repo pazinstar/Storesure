@@ -109,6 +109,7 @@ class S12RequisitionSerializer(serializers.ModelSerializer):
     items = RequisitionItemSerializer(many=True, required=False)
     approvals = serializers.SerializerMethodField(read_only=True)
     status_logs = serializers.SerializerMethodField(read_only=True)
+    issues = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Requisition
@@ -182,6 +183,13 @@ class S12RequisitionSerializer(serializers.ModelSerializer):
         try:
             logs = obj.status_logs.order_by('-createdAt')
             return [{'previous_status': l.previous_status, 'new_status': l.new_status, 'changed_by': l.changed_by, 'createdAt': l.createdAt.isoformat()} for l in logs]
+        except Exception:
+            return []
+
+    def get_issues(self, obj):
+        try:
+            issues = obj.issues.order_by('-createdAt')
+            return IssueHistorySerializer(issues, many=True).data
         except Exception:
             return []
 

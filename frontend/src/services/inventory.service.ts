@@ -192,6 +192,21 @@ export const inventoryService = {
         }
     },
 
+    async getS13Record(id: string): Promise<S13Record | null> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            return MOCK_S13_RECORDS.find(r => r.id === id) || null;
+        } else {
+            const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/issue/${id}/`);
+            if (!response.ok) {
+                // Some backends may not expose a detail endpoint; fallback to list
+                const list = await this.getS13Records();
+                return list.find(r => r.id === id) || null;
+            }
+            return response.json();
+        }
+    },
+
     async createS13Record(record: Omit<S13Record, "id">): Promise<S13Record> {
         if (apiConfig.useMockData) {
             await delay(SIMULATE_DELAY);
