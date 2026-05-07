@@ -97,9 +97,14 @@ export default function LSOManagement() {
               <div className="text-sm mb-2">{l.description}</div>
               <div className="text-sm font-semibold">KES {Number(l.totalValue || 0).toLocaleString()}</div>
               <div className="mt-2 text-xs text-muted-foreground">Status: {l.status}</div>
-              <div className="mt-2">
+              <div className="mt-2 flex gap-2">
                 <Button variant="ghost" size="sm" onClick={() => window.open(`/api/v1/storekeeper/stores/lsos/${l.id}/print-html/`, '_blank')}>Print HTML</Button>
                 <Button variant="ghost" size="sm" onClick={() => window.open(`/api/v1/storekeeper/stores/lsos/${l.id}/print-pdf/`, '_blank')}>Download PDF</Button>
+                {l.requisition ? (
+                  <a href={`/stores/s12?view=${encodeURIComponent(l.requisition)}`} className="inline-block">
+                    <Button variant="outline" size="sm">Open Requisition</Button>
+                  </a>
+                ) : null}
               </div>
             </CardContent>
           </Card>

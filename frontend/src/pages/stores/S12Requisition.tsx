@@ -42,7 +42,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
+import { useEffect } from "react";
 import { formatISO, parseISO } from "date-fns";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -90,6 +91,24 @@ export default function S12Requisition() {
     queryKey: ['inventory'],
     queryFn: () => api.getInventory()
   });
+
+  // Open requisition detail when `?view=<id>` is present in URL
+  const location = useLocation();
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(location.search);
+      const viewId = params.get('view');
+      if (viewId && requisitions && requisitions.length > 0) {
+        const find = requisitions.find(r => String(r.id) === String(viewId));
+        if (find) {
+          setSelectedRequisition(find);
+          setViewDialogOpen(true);
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, [location.search, requisitions]);
 
   const storeItems: StoreItem[] = inventoryItems.map(item => ({
     code: String(item.id),
