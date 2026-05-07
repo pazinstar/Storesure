@@ -473,6 +473,33 @@ export const inventoryService = {
             return response.json();
         }
     }
+
+    async getLSOs(): Promise<any[]> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            return [];
+        } else {
+            const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/lsos/`);
+            if (!response.ok) throw new Error("Failed");
+            const data = await response.json();
+            return data.results ? data.results : data;
+        }
+    },
+
+    async createLSO(payload: any): Promise<any> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            return { ...payload, id: `LSO-${Date.now()}` };
+        } else {
+            const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/lsos/`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) throw new Error('Failed to create LSO');
+            return response.json();
+        }
+    },
 ,
 
     async getS11Record(id: string): Promise<S11Record> {

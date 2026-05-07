@@ -5,7 +5,8 @@ from .models import (
     Delivery, 
     Requisition, 
     IssueHistory, 
-    ReceivingHistory
+    ReceivingHistory,
+    LsoRecord,
 )
 from .serializers import (
     InventoryItemSerializer,
@@ -80,6 +81,8 @@ class InventoryExportView(generics.GenericAPIView):
 
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import PermissionDenied
 from django.db import transaction
 from django.core.mail import send_mail
 from django.conf import settings
@@ -1000,6 +1003,85 @@ class LsoPrintHtmlView(APIView):
         return HttpResponse(html, content_type='text/html')
 
 
+class LpoPdfView(APIView):
+        """GET /lpos/<id>/print-pdf/ -- render and return PDF for LPO using WeasyPrint"""
+        def get(self, request, id, format=None):
+                try:
+                        po = PurchaseOrder.objects.get(id=id)
+                except PurchaseOrder.DoesNotExist:
+                        return Response({'detail': 'Purchase order not found.'}, status=404)
+
+                items_rows = "".join([
+                        f"<tr><td>{it.description}</td><td>{it.unit}</td><td style='text-align:right'>{int(it.quantity)}</td><td style='text-align:right'>{float(it.unitPrice):,.2f}</td><td style='text-align:right'>{float(it.quantity * float(it.unitPrice)):,.2f}</td></tr>"
+                        for it in po.items.all() if hasattr(po, 'items')
+                ])
+
+                html = f"""
+                <!doctype html>
+                <html>
+                <head>
+                    <meta charset='utf-8'/>
+                    <title>{po.lpoNumber} - Print</title>
+                    <style>body{{font-family: Arial, sans-serif;}}table{{width:100%;border-collapse:collapse}}td,th{{border:1px solid #000;padding:6px}}</style>
+                </head>
+                <body>
+                    <h2>Local Purchase Order (LPO) - {po.lpoNumber}</h2>
+                    <p><strong>Supplier:</strong> {po.supplierName} &nbsp; <strong>Date:</strong> {po.date}</p>
+                    <p><strong>Account:</strong> {po.account or ''} &nbsp; <strong>Vote Head:</strong> {po.vote_head or ''} &nbsp; <strong>Procurement Method:</strong> {po.procurement_method or ''}</p>
+                    <table>
+                        <thead><tr><th>Description</th><th>Unit</th><th>Qty</th><th>Unit</th><th>Total</th></tr></thead>
+                        <tbody>
+                            {items_rows}
+                        </tbody>
+                    </table>
+                    <p style='text-align:right;font-weight:bold'>Total: KES {float(po.totalValue):,.2f}</p>
+                </body>
+                </html>
+                """
+
+                try:
+                        from weasyprint import HTML
+                except Exception:
+                        return Response({'error': 'WeasyPrint is not available on the server. Install weasyprint and its system dependencies.'}, status=500)
+
+                pdf = HTML(string=html).write_pdf()
+                return HttpResponse(pdf, content_type='application/pdf')
+
+
+class LsoPdfView(APIView):
+        """GET /lsos/<id>/print-pdf/ -- render and return PDF for LSO using WeasyPrint"""
+        def get(self, request, id, format=None):
+                try:
+                        lso = LsoRecord.objects.get(id=id)
+                except LsoRecord.DoesNotExist:
+                        return Response({'detail': 'LSO record not found.'}, status=404)
+
+                html = f"""
+                <!doctype html>
+                <html>
+                <head>
+                    <meta charset='utf-8'/>
+                    <title>{lso.lsoNumber or lso.id} - LSO Print</title>
+                    <style>body{{font-family: Arial, sans-serif;}}table{{width:100%;border-collapse:collapse}}td,th{{border:1px solid #000;padding:6px}}</style>
+                </head>
+                <body>
+                    <h2>Local Service Order (LSO) - {lso.lsoNumber or lso.id}</h2>
+                    <p><strong>Supplier:</strong> {lso.supplierName} &nbsp; <strong>Date:</strong> {lso.createdAt.date() if lso.createdAt else ''}</p>
+                    <p><strong>Description:</strong> {lso.description}</p>
+                    <p style='text-align:right;font-weight:bold'>Total: KES {float(lso.totalValue):,.2f}</p>
+                </body>
+                </html>
+                """
+
+                try:
+                        from weasyprint import HTML
+                except Exception:
+                        return Response({'error': 'WeasyPrint is not available on the server. Install weasyprint and its system dependencies.'}, status=500)
+
+                pdf = HTML(string=html).write_pdf()
+                return HttpResponse(pdf, content_type='application/pdf')
+
+
 class LsoDetailJsonView(APIView):
     """GET /lsos/<id>/ -- return JSON for LSO record (used by frontend print page)"""
     def get(self, request, id, format=None):
@@ -1020,6 +1102,31 @@ class LsoDetailJsonView(APIView):
             'createdAt': lso.createdAt.isoformat() if lso.createdAt else None,
         }
         return Response(data)
+
+
+class LsoListCreateView(generics.ListCreateAPIView):
+    from .serializers import LsoRecordSerializer
+    queryset = LsoRecord.objects.all().order_by('-createdAt')
+    serializer_class = LsoRecordSerializer
+    permission_classes = [IsAuthenticated]
+
+    def perform_create(self, serializer):
+        # attach createdBy from request user if available
+        request = self.request
+        # Require authenticated users; restrict to staff users for creation
+        if not request or not getattr(request, 'user', None) or request.user.is_anonymous:
+            raise PermissionDenied('Authentication required to create LSO')
+        if not (getattr(request.user, 'is_staff', False) or request.user.has_perm('roles.storekeeper.add_lsorecord')):
+            raise PermissionDenied('Insufficient permissions to create LSO')
+
+        if getattr(request, 'user', None):
+            try:
+                name = request.user.get_full_name() or getattr(request.user, 'username', str(request.user))
+            except Exception:
+                name = str(request.user)
+            serializer.save(createdBy=name)
+        else:
+            serializer.save()
 
 
 class LpoSendView(APIView):

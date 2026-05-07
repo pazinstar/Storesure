@@ -1127,3 +1127,23 @@ class DisposalApprovalSerializer(serializers.Serializer):
     def validate(self, data):
         # if approving and posting write-off ensure proceeds provided (can be zero)
         return data
+
+
+class LsoRecordSerializer(serializers.ModelSerializer):
+    class Meta:
+        from .models import LsoRecord
+        model = LsoRecord
+        fields = '__all__'
+        read_only_fields = ['id', 'createdAt', 'updatedAt']
+
+    def create(self, validated_data):
+        import uuid
+        from django.utils import timezone
+        # ensure id
+        if not validated_data.get('id'):
+            validated_data['id'] = str(uuid.uuid4())
+        # ensure lsoNumber
+        if not validated_data.get('lsoNumber'):
+            year = timezone.now().year
+            validated_data['lsoNumber'] = f"LSO-{year}-{str(uuid.uuid4())[:8].upper()}"
+        return super().create(validated_data)

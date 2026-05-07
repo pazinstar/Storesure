@@ -5,6 +5,10 @@ from django.test import TestCase
 from rest_framework.exceptions import ValidationError
 from .models import InventoryItem, ItemTypeChoices
 from .serializers import InventoryItemSerializer, VALID_ITEM_TYPES
+from rest_framework.test import APITestCase, APIClient
+from django.contrib.auth import get_user_model
+from django.urls import reverse
+from .models import Requisition, LsoRecord
 
 
 class ItemTypeChoicesEnumTests(TestCase):
@@ -210,3 +214,39 @@ class Phase1EmptyModelTests(TestCase):
         self.assertIsNotNone(lso.id)
         self.assertIsNotNone(lso.lsoNumber)
         self.assertEqual(lso.status, 'draft')
+
+
+class LsoApiTests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='teststaff', password='pass', is_staff=True)
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def test_create_lso_with_requisition_link(self):
+        # create a requisition to link
+        req = Requisition.objects.create(
+            id='RQ-TEST-1',
+            requestDate='2024-01-01',
+            requestingDepartment='Dept',
+            requestedBy='User',
+            status='Approved'
+        )
+
+        payload = {
+            'supplierName': 'Supplier X',
+            'description': 'Service X',
+            'totalValue': 5000,
+            'requisition': req.id,
+            'status': 'Draft'
+        }
+
+        url = '/api/v1/storekeeper/stores/lsos/'
+        resp = self.client.post(url, payload, format='json')
+        self.assertEqual(resp.status_code, 201, msg=resp.content)
+        data = resp.json()
+        self.assertIn('id', data)
+        # fetch LSO from DB and verify FK
+        lso = LsoRecord.objects.get(id=data['id'])
+        self.assertIsNotNone(lso.requisition)
+        self.assertEqual(lso.requisition.id, req.id)

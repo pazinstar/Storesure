@@ -56,6 +56,7 @@ import RecordsRetention from "./pages/stores/RecordsRetention";
 import S12Requisition from "./pages/stores/S12Requisition";
 import StoresLPOManagement from "./pages/stores/LPOManagement";
 import LsoPrintPage from "./pages/stores/LsoPrintPage";
+import LSOManagement from "./pages/stores/LSOManagement";
 import DeliveryLogging from "./pages/stores/DeliveryLogging";
 import InspectionAcceptance from "./pages/stores/InspectionAcceptance";
 import { FileMovementProvider } from "./contexts/FileMovementContext";
@@ -446,6 +447,16 @@ const App = () => (
                                               <ProtectedRoute>
                                                 <AuthenticatedLayout>
                                                   <LsoPrintPage />
+                                                </AuthenticatedLayout>
+                                              </ProtectedRoute>
+                                            }
+                                          />
+                                          <Route
+                                            path="/stores/lsos"
+                                            element={
+                                              <ProtectedRoute>
+                                                <AuthenticatedLayout>
+                                                  <LSOManagement />
                                                 </AuthenticatedLayout>
                                               </ProtectedRoute>
                                             }
