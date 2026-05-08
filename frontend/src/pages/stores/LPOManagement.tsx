@@ -110,10 +110,11 @@ export default function LPOManagementPage() {
     queryFn: () => api.getLPOs()
   });
 
-  const { data: suppliers = [] } = useQuery({
-    queryKey: ["suppliers"],
-    queryFn: () => procurementService.getSuppliers(),
+  const { data: suppliersResp } = useQuery({
+    queryKey: ["suppliers", 1],
+    queryFn: () => procurementService.getSuppliers(1),
   });
+  const suppliers = suppliersResp ? suppliersResp.results : [];
 
   const createMutation = useMutation({
     mutationFn: (data: Parameters<typeof api.createLPO>[0]) => api.createLPO(data),

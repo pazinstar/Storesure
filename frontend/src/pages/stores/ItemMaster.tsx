@@ -71,24 +71,26 @@ export default function ItemMaster() {
   const { isReadOnly, blockAction } = useReadOnlyGuard();
   const queryClient = useQueryClient();
 
-  const { data: initialItems = [] } = useQuery({
-    queryKey: ['inventory-items'],
-    queryFn: () => api.getInventory()
-  });
-
   const { data: settings } = useQuery({
     queryKey: ['inventory-settings'],
     queryFn: () => api.getInventorySettings()
   });
+  // Paging state and queries
+  const [page, setPage] = useState(1);
+  const { data: inventoryResp, isLoading: isInventoryLoading } = useQuery({
+    queryKey: ['inventory-items', page],
+    queryFn: () => api.getInventory(page),
+    keepPreviousData: true,
+  });
 
   // Local state for UI mutations
   const [items, setItems] = useState<Item[]>([]);
-  // Sync items when api fetches
+  // Sync items when api fetches (update on page change)
   useEffect(() => {
-    if (initialItems.length > 0 && items.length === 0) {
-      setItems(initialItems);
-    }
-  }, [initialItems]);
+    if (!inventoryResp) return;
+    const source = Array.isArray(inventoryResp) ? inventoryResp : (inventoryResp.results || []);
+    setItems(source as Item[]);
+  }, [inventoryResp]);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("All Categories");
@@ -190,8 +192,9 @@ export default function ItemMaster() {
   const createItemMutation = useMutation({
     mutationFn: (newItem: Omit<Item, "id">) => api.createItem(newItem),
     onSuccess: (savedItem) => {
+      // refresh inventory pages after creation
+      queryClient.invalidateQueries(['inventory-items']);
       setItems([savedItem, ...items]);
-      queryClient.setQueryData(['inventory-items'], (oldData: any) => [savedItem, ...(oldData || [])]);
       toast.success("Item added successfully");
       setIsAddOpen(false);
       setShowConfirmDialog(false);
@@ -208,11 +211,9 @@ export default function ItemMaster() {
   const updateItemMutation = useMutation({
     mutationFn: ({ id, updates }: { id: string; updates: Partial<Item> }) => api.updateItem(id, updates),
     onSuccess: (updatedItem) => {
+      // refresh inventory pages after update
+      queryClient.invalidateQueries(['inventory-items']);
       setItems(items.map((it) => (it.id === updatedItem.id ? updatedItem : it)));
-      queryClient.setQueryData(['inventory-items'], (oldData: any) => {
-        if (!oldData) return [updatedItem];
-        return (oldData as Item[]).map((it) => (it.id === updatedItem.id ? updatedItem : it));
-      });
       toast.success("Item updated successfully");
     },
     onError: () => {
@@ -353,6 +354,10 @@ export default function ItemMaster() {
     const matchesCategory = categoryFilter === "All Categories" || item.category === categoryFilter;
     return matchesSearch && matchesCategory;
   });
+
+  const totalCount = inventoryResp && !Array.isArray(inventoryResp) ? (inventoryResp.count || 0) : items.length;
+  const pageSize = inventoryResp && !Array.isArray(inventoryResp) ? (inventoryResp.results?.length || items.length) : items.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / (pageSize || 10)));
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -515,7 +520,16 @@ export default function ItemMaster() {
             </Table>
           </div>
           <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">
-            <p>Showing {filteredItems.length} of {items.length} items</p>
+            <p>Showing {filteredItems.length} of {totalCount} items</p>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}>
+                Previous
+              </Button>
+              <div>Page {page} / {totalPages}</div>
+              <Button size="sm" variant="outline" onClick={() => setPage(p => (p < totalPages ? p + 1 : p))} disabled={page >= totalPages}>
+                Next
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>

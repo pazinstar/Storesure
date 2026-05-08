@@ -245,7 +245,7 @@ class DashboardLowStockView(APIView):
     """Return a list of low stock items for dashboard"""
     def get(self, request, *args, **kwargs):
         # Consider items whose openingBalance <= minimumStockLevel or reorderLevel
-        items = InventoryItem.objects.filter(openingBalance__lte=models.F('minimumStockLevel')).order_by('openingBalance')[:20]
+        items = InventoryItem.objects.filter(openingBalance__lte=F('minimumStockLevel')).order_by('openingBalance')[:20]
         result = []
         for it in items:
             result.append({
@@ -264,7 +264,7 @@ class DashboardStatsView(APIView):
         from django.db.models import Count
 
         total_items = InventoryItem.objects.count()
-        low_stock_count = InventoryItem.objects.filter(openingBalance__lte=models.F('minimumStockLevel')).count()
+        low_stock_count = InventoryItem.objects.filter(openingBalance__lte=F('minimumStockLevel')).count()
 
         from django.utils import timezone
         now = timezone.now()
@@ -284,16 +284,44 @@ class DashboardStatsView(APIView):
 
         categories_count = InventoryItem.objects.values('category').distinct().count()
         pending_issues = IssueHistory.objects.filter(status__iexact='Pending').count()
+        # Compute simple month-over-month trends for S11 and S13
+        prev_month = month - 1 if month > 1 else 12
+        prev_year = year if month > 1 else year - 1
 
-        return Response({
-            'totalItems': {'value': str(total_items), 'trend': '', 'trendUp': True},
-            'lowStockItems': {'value': str(low_stock_count), 'trend': '', 'trendUp': False},
-            's11ThisMonth': {'value': str(s11_count), 'trend': '', 'trendUp': True},
-            's13ThisMonth': {'value': str(s13_count), 'trend': '', 'trendUp': True},
+        s11_prev = ReceivingHistory.objects.filter(date__year=prev_year, date__month=prev_month).count()
+        s13_prev = IssueHistory.objects.filter(date__year=prev_year, date__month=prev_month).count()
+
+        def pct_change(current, previous):
+            try:
+                if previous == 0:
+                    return '', False
+                change = (current - previous) / previous * 100.0
+                sign = '+' if change >= 0 else ''
+                return f"{sign}{change:.0f}% from last month", change >= 0
+            except Exception:
+                return '', False
+
+        s11_trend, s11_trend_up = pct_change(s11_count, s11_prev)
+        s13_trend, s13_trend_up = pct_change(s13_count, s13_prev)
+
+        # total items trend: compare total items to end of previous month (approximate by items created before month)
+        try:
+            items_prev_month_count = InventoryItem.objects.filter(createdAt__lt=timezone.datetime(prev_year, prev_month, 1, tzinfo=timezone.utc)).count()
+            total_trend, total_trend_up = pct_change(total_items, items_prev_month_count)
+        except Exception:
+            total_trend, total_trend_up = '', True
+
+        stats = {
+            'totalItems': {'value': str(total_items), 'trend': total_trend, 'trendUp': total_trend_up},
+            'lowStockItems': {'value': str(low_stock_count), 'trend': f"{low_stock_count} critical", 'trendUp': False},
+            's11ThisMonth': {'value': str(s11_count), 'trend': s11_trend, 'trendUp': s11_trend_up},
+            's13ThisMonth': {'value': str(s13_count), 'trend': s13_trend, 'trendUp': s13_trend_up},
             'stockValue': f"KES {float(sv):,.2f}",
             'categories': str(categories_count),
             'pendingIssues': str(pending_issues),
-        })
+        }
+
+        return Response(stats)
 
 class DeliveriesListView(generics.ListCreateAPIView):
     queryset = Delivery.objects.all().order_by('-createdAt', '-id')
@@ -1462,65 +1490,7 @@ class DashboardTransactionsView(APIView):
             "results": transactions
         })
 
-class DashboardLowStockView(APIView):
-    def get(self, request, *args, **kwargs):
-        low_stock_items = InventoryItem.objects.filter(openingBalance__lte=F('minimumStockLevel')).order_by('openingBalance')[:10]
-        
-        results = []
-        for item in low_stock_items:
-            results.append({
-                "id": item.id,
-                "name": item.name,
-                "current": item.openingBalance,
-                "minimum": item.minimumStockLevel,
-                "unit": item.unit
-            })
-            
-        return Response({
-            "count": len(results),
-            "next": None,
-            "previous": None,
-            "results": results
-        })
 
-class DashboardStatsView(APIView):
-    def get(self, request, *args, **kwargs):
-        from .models import InventoryItem, ReceivingHistory, IssueHistory
-        from django.db.models import F
-        from django.utils import timezone
-        
-        now = timezone.now()
-        
-        # Calculate true aggregations where possible
-        total_items = InventoryItem.objects.count()
-        low_stock_count = InventoryItem.objects.filter(openingBalance__lte=F('minimumStockLevel')).count()
-        
-        # Current month counts
-        s11_count = ReceivingHistory.objects.filter(
-            createdAt__year=now.year,
-            createdAt__month=now.month
-        ).count()
-        
-        s13_count = IssueHistory.objects.filter(
-            createdAt__year=now.year,
-            createdAt__month=now.month
-        ).count()
-        
-        categories_count = InventoryItem.objects.values('category').distinct().count()
-        pending_issues = IssueHistory.objects.filter(status__iexact='Pending').count()
-
-        # Build response with calculated metrics and mocked trends/values for complex metrics
-        stats = {
-            "totalItems": { "value": str(total_items), "trend": "+5% from last month", "trendUp": True },
-            "lowStockItems": { "value": str(low_stock_count), "trend": f"{low_stock_count} critical", "trendUp": False },
-            "s11ThisMonth": { "value": str(s11_count), "trend": "+12% increase", "trendUp": True },
-            "s13ThisMonth": { "value": str(s13_count), "trend": "-3% decrease", "trendUp": False },
-            "stockValue": "KES 2.4M",  # Mocked as InventoryItem doesn't currently store unit cost natively
-            "categories": str(categories_count),
-            "pendingIssues": str(pending_issues)
-        }
-        
-        return Response(stats)
 
 class StockAdjustmentListCreateView(generics.ListCreateAPIView):
     from .models import StockAdjustment

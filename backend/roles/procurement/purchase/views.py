@@ -89,6 +89,22 @@ class LPOStatsView(APIView):
             "totalValue": totalValue
         })
 
+
+class SupplierStatsView(APIView):
+    """Return aggregate counts for suppliers (total and status breakdown)."""
+    def get(self, request):
+        qs = Supplier.objects.all()
+        total = qs.count()
+        active = qs.filter(status__iexact='Active').count()
+        inactive = qs.filter(status__iexact='Inactive').count()
+        blacklisted = qs.filter(status__iexact='Blacklisted').count()
+        return Response({
+            'total': total,
+            'active': active,
+            'inactive': inactive,
+            'blacklisted': blacklisted
+        })
+
 class ProcurementReferenceListCreateView(generics.ListCreateAPIView):
     queryset = ProcurementReference.objects.all().order_by('-createdAt')
     serializer_class = ProcurementReferenceSerializer

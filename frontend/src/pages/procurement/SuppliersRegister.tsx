@@ -130,9 +130,20 @@ export default function SuppliersRegister() {
   const { isReadOnly, blockAction } = useReadOnlyGuard();
   const { addNotification } = useNotifications();
 
-  const { data: suppliers = [], isLoading } = useQuery({
-    queryKey: ["suppliers"],
-    queryFn: () => procurementService.getSuppliers(),
+  const [page, setPage] = useState(1);
+  const { data: suppliersResp, isLoading } = useQuery({
+    queryKey: ["suppliers", page],
+    queryFn: () => procurementService.getSuppliers(page),
+    keepPreviousData: true,
+  });
+  const suppliers = suppliersResp?.results || [];
+  const totalCount = suppliersResp?.count || 0;
+  const pageSize = suppliers.length || 10;
+  const totalPages = Math.max(1, Math.ceil(totalCount / (pageSize || 10)));
+
+  const { data: supplierStats } = useQuery({
+    queryKey: ['supplier-stats'],
+    queryFn: () => procurementService.getSupplierStats(),
   });
 
   const addMutation = useMutation({
@@ -193,6 +204,7 @@ export default function SuppliersRegister() {
 
     return matchesSearch && matchesStatus && matchesCategory;
   });
+
 
   const handleOpenDialog = (supplier?: Supplier) => {
     if (blockAction("add or edit suppliers")) return;
@@ -426,7 +438,7 @@ export default function SuppliersRegister() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Total Suppliers</p>
-                <p className="text-2xl font-bold">{suppliers.length}</p>
+                <p className="text-2xl font-bold">{supplierStats?.total ?? totalCount ?? suppliers.length}</p>
               </div>
             </div>
           </CardContent>
@@ -440,7 +452,7 @@ export default function SuppliersRegister() {
               <div>
                 <p className="text-sm text-muted-foreground">Active</p>
                 <p className="text-2xl font-bold">
-                  {suppliers.filter((s) => s.status === "Active").length}
+                  {supplierStats?.active ?? suppliers.filter((s) => s.status === "Active").length}
                 </p>
               </div>
             </div>
@@ -455,7 +467,7 @@ export default function SuppliersRegister() {
               <div>
                 <p className="text-sm text-muted-foreground">Inactive</p>
                 <p className="text-2xl font-bold">
-                  {suppliers.filter((s) => s.status === "Inactive").length}
+                  {supplierStats?.inactive ?? suppliers.filter((s) => s.status === "Inactive").length}
                 </p>
               </div>
             </div>
@@ -470,7 +482,7 @@ export default function SuppliersRegister() {
               <div>
                 <p className="text-sm text-muted-foreground">Blacklisted</p>
                 <p className="text-2xl font-bold">
-                  {suppliers.filter((s) => s.status === "Blacklisted").length}
+                  {supplierStats?.blacklisted ?? suppliers.filter((s) => s.status === "Blacklisted").length}
                 </p>
               </div>
             </div>
@@ -629,6 +641,20 @@ export default function SuppliersRegister() {
           </Table>
         </CardContent>
       </Card>
+
+      {/* Pagination controls */}
+      <div className="flex items-center justify-between py-4">
+        <div className="text-sm text-muted-foreground">Total: {totalCount}</div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={!suppliersResp?.previous || page <= 1}>
+            Previous
+          </Button>
+          <div className="text-sm">Page {page} / {totalPages}</div>
+          <Button size="sm" variant="outline" onClick={() => setPage((p) => (p < totalPages ? p + 1 : p))} disabled={!suppliersResp?.next || page >= totalPages}>
+            Next
+          </Button>
+        </div>
+      </div>
 
       {/* Add/Edit Dialog */}
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>

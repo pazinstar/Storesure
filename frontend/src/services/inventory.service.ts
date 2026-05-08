@@ -472,7 +472,7 @@ export const inventoryService = {
             if (!response.ok) throw new Error("Failed");
             return response.json();
         }
-    }
+    },
 
     async getLSOs(): Promise<any[]> {
         if (apiConfig.useMockData) {
@@ -500,7 +500,6 @@ export const inventoryService = {
             return response.json();
         }
     },
-,
 
     async getS11Record(id: string): Promise<S11Record> {
         if (apiConfig.useMockData) {
@@ -513,9 +512,7 @@ export const inventoryService = {
             if (!response.ok) throw new Error("Failed to load S11 record");
             return response.json();
         }
-    }
-
-,
+    },
 
     async createS2Receipt(payload: any): Promise<any> {
         if (apiConfig.useMockData) {
@@ -530,9 +527,7 @@ export const inventoryService = {
             if (!response.ok) throw new Error("Failed to post S2 receipt");
             return response.json();
         }
-    }
-
-,
+    },
 
     async createS2Issue(payload: any): Promise<any> {
         if (apiConfig.useMockData) {
@@ -547,9 +542,7 @@ export const inventoryService = {
             if (!response.ok) throw new Error("Failed to post S2 issue");
             return response.json();
         }
-    }
-
-    ,
+    },
 
     async createS2Transfer(payload: any): Promise<any> {
         if (apiConfig.useMockData) {
@@ -564,9 +557,7 @@ export const inventoryService = {
             if (!response.ok) throw new Error("Failed to post S2 transfer");
             return response.json();
         }
-    }
-
-    ,
+    },
 
     async createS2Return(payload: any): Promise<any> {
         if (apiConfig.useMockData) {
@@ -581,9 +572,7 @@ export const inventoryService = {
             if (!response.ok) throw new Error("Failed to post S2 return");
             return response.json();
         }
-    }
-
-    ,
+    },
 
     async createS2Damage(payload: any): Promise<any> {
         if (apiConfig.useMockData) {
@@ -598,9 +587,7 @@ export const inventoryService = {
             if (!response.ok) throw new Error("Failed to post S2 damage");
             return response.json();
         }
-    }
-
-    ,
+    },
 
     async reverseS2Transaction(id: string, payload?: any): Promise<any> {
         if (apiConfig.useMockData) {

@@ -18,9 +18,9 @@ class ProcurementSupplierSerializer(serializers.ModelSerializer):
     class Meta:
         model = Supplier
         fields = [
-            'id', 'name', 'taxPin', 'contactPerson', 'phone', 'email', 
-            'physicalAddress', 'category', 'paymentTerms', 'status', 
-            'rating', 'county', 'createdAt', 'updatedAt'
+            'id', 'name', 'tradingName', 'registrationNumber', 'taxPin', 'contactPerson', 'phone', 'email',
+            'physicalAddress', 'postalAddress', 'category', 'paymentTerms', 'status',
+            'bankName', 'bankBranch', 'bankAccountNumber', 'notes', 'rating', 'county', 'createdAt', 'updatedAt'
         ]
         read_only_fields = ['id', 'createdAt', 'updatedAt']
 

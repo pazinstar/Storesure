@@ -3,15 +3,38 @@ import { Supplier, S12Requisition, LPO, DeliveryRecord, ProcurementDashboardData
 
 export const procurementService = {
     // Suppliers
-    async getSuppliers(): Promise<Supplier[]> {
+    async getSuppliers(page: number = 1): Promise<{ results: Supplier[]; count: number; next: string | null; previous: string | null }> {
         if (apiConfig.useMockData) {
             await delay(SIMULATE_DELAY);
-            return [...MOCK_SUPPLIERS];
+            // simulate pagination: page size 10
+            const pageSize = 10;
+            const start = (page - 1) * pageSize;
+            const results = MOCK_SUPPLIERS.slice(start, start + pageSize);
+            const next = start + pageSize < MOCK_SUPPLIERS.length ? `${apiConfig.baseUrl}/procurement/suppliers/?page=${page + 1}` : null;
+            const previous = page > 1 ? `${apiConfig.baseUrl}/procurement/suppliers/?page=${page - 1}` : null;
+            return { results, count: MOCK_SUPPLIERS.length, next, previous };
         }
-        const response = await fetch(`${apiConfig.baseUrl}/procurement/suppliers/`);
+        const response = await fetch(`${apiConfig.baseUrl}/procurement/suppliers/?page=${page}`);
         if (!response.ok) throw new Error("Failed to fetch suppliers");
         const data = await response.json();
-        return Array.isArray(data) ? data : (data?.results || []);
+        if (Array.isArray(data)) {
+            return { results: data, count: data.length, next: null, previous: null };
+        }
+        return { results: data?.results || [], count: data?.count || 0, next: data?.next || null, previous: data?.previous || null };
+    },
+
+    async getSupplierStats(): Promise<{ total: number; active: number; inactive: number; blacklisted: number }> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            const total = MOCK_SUPPLIERS.length;
+            const active = MOCK_SUPPLIERS.filter(s => s.status === 'Active').length;
+            const inactive = MOCK_SUPPLIERS.filter(s => s.status === 'Inactive').length;
+            const blacklisted = MOCK_SUPPLIERS.filter(s => s.status === 'Blacklisted').length;
+            return { total, active, inactive, blacklisted };
+        }
+        const response = await fetch(`${apiConfig.baseUrl}/procurement/suppliers/stats/`);
+        if (!response.ok) throw new Error('Failed to fetch supplier stats');
+        return response.json();
     },
 
     async createSupplier(data: Omit<Supplier, "id" | "createdAt" | "updatedAt">): Promise<Supplier> {
