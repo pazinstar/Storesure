@@ -359,6 +359,9 @@ export default function ItemMaster() {
   const pageSize = inventoryResp && !Array.isArray(inventoryResp) ? (inventoryResp.results?.length || items.length) : items.length;
   const totalPages = Math.max(1, Math.ceil(totalCount / (pageSize || 10)));
 
+  const hasNext = inventoryResp && !Array.isArray(inventoryResp) ? Boolean(inventoryResp.next) : page < totalPages;
+  const hasPrevious = inventoryResp && !Array.isArray(inventoryResp) ? Boolean(inventoryResp.previous) : page > 1;
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "In Stock":
@@ -522,14 +525,30 @@ export default function ItemMaster() {
           <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">
             <p>Showing {filteredItems.length} of {totalCount} items</p>
             <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}>
+              <Button size="sm" variant="outline" onClick={() => {
+                if (!hasPrevious) return;
+                if (inventoryResp && !Array.isArray(inventoryResp) && inventoryResp.previous) {
+                  try { const u = new URL(inventoryResp.previous); const p = u.searchParams.get('page'); if (p) return setPage(Number(p)); } catch(e) {}
+                }
+                setPage(p => Math.max(1, p - 1));
+              }} disabled={!hasPrevious}>
                 Previous
               </Button>
               <div>Page {page} / {totalPages}</div>
-              <Button size="sm" variant="outline" onClick={() => setPage(p => (p < totalPages ? p + 1 : p))} disabled={page >= totalPages}>
+              <Button size="sm" variant="outline" onClick={() => {
+                if (!hasNext) return;
+                if (inventoryResp && !Array.isArray(inventoryResp) && inventoryResp.next) {
+                  try { const u = new URL(inventoryResp.next); const p = u.searchParams.get('page'); if (p) return setPage(Number(p)); } catch(e) {}
+                }
+                setPage(p => (p < totalPages ? p + 1 : p));
+              }} disabled={!hasNext}>
                 Next
               </Button>
             </div>
+          </div>
+          <div className="mt-2 text-xs text-muted-foreground">
+            <div>debug: next={String(inventoryResp && !Array.isArray(inventoryResp) ? inventoryResp.next : '')} previous={String(inventoryResp && !Array.isArray(inventoryResp) ? inventoryResp.previous : '')}</div>
+            <div>debug: page={page} totalPages={totalPages} pageSize={pageSize} totalCount={totalCount} hasNext={String(hasNext)} hasPrevious={String(hasPrevious)}</div>
           </div>
         </CardContent>
       </Card>
