@@ -695,6 +695,7 @@ class RequisitionApprovalView(APIView):
             return Response({'error': 'Requisition not found'}, status=status.HTTP_404_NOT_FOUND)
 
         data = request.data or {}
+        print(f"Approval payload: {data}")
         approver = data.get('approver') or getattr(request, 'user', None) and getattr(request.user, 'username', '') or 'system'
         level = int(data.get('level') or 1)
         decision = data.get('decision') or 'partially_approved'
@@ -710,6 +711,13 @@ class RequisitionApprovalView(APIView):
                 approved_qty = int(it.get('approved_qty') or 0)
                 item_decision = it.get('decision') or ('approved' if approved_qty>0 else 'rejected')
                 req_item = RequisitionItem.objects.select_for_update().filter(id=rid, requisition=req).first()
+                if not req_item:
+                    # Fallback: some clients may send string/uuid forms that don't match DB type directly.
+                    # Try matching by stringified id among requisition items to be resilient to type differences.
+                    for candidate in RequisitionItem.objects.select_for_update().filter(requisition=req):
+                        if str(candidate.id) == str(rid):
+                            req_item = candidate
+                            break
                 if not req_item:
                     continue
 
@@ -802,8 +810,10 @@ class RequisitionApprovalView(APIView):
             )
 
             # Update requisition overall status based on decisions
-            total_requested = sum((ri.quantityRequested or 0) for ri in req.items.all())
-            total_approved = sum((ri.quantityApproved or 0) for ri in req.items.all())
+            # Use fresh DB query to avoid stale prefetched `req.items` instances
+            items_qs = RequisitionItem.objects.filter(requisition=req)
+            total_requested = sum((ri.quantityRequested or 0) for ri in items_qs)
+            total_approved = sum((ri.quantityApproved or 0) for ri in items_qs)
             if total_approved == 0:
                 req.status = 'Rejected'
             elif total_approved < total_requested:

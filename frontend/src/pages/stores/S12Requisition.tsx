@@ -56,7 +56,9 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useNotifications } from "@/contexts/NotificationContext";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/services/api";
+import { api, apiConfig } from "@/services/api";
+import ReusableTable, { Column } from "@/components/ui/reusable-table";
+import { TablePagination } from "@/components/ui/table-pagination";
 import requisitionsApi from "@/services/requisitions.service";
 
 const departments = [
@@ -100,8 +102,8 @@ export default function S12Requisition() {
     try {
       const params = new URLSearchParams(location.search);
       const viewId = params.get('view');
-      if (viewId && requisitions && requisitions.length > 0) {
-        const find = requisitions.find(r => String(r.id) === String(viewId));
+      if (viewId && s12Items && s12Items.length > 0) {
+        const find = s12Items.find(r => String(r.id) === String(viewId));
         if (find) {
           setSelectedRequisition(find);
           setViewDialogOpen(true);
@@ -118,6 +120,26 @@ export default function S12Requisition() {
     unit: item.unit,
     assetType: "Consumable"
   }));
+
+  // Pagination & server-side S12 fetch (handles paginated response {count,next,previous,results})
+  const [page, setPage] = useState<number>(1);
+  const { data: s12Resp, isLoading: s12Loading } = useQuery({
+    queryKey: ['s12-requisitions', page],
+    queryFn: async () => {
+      const res = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/s12-requisitions/?page=${page}`);
+      if (!res.ok) throw new Error('Failed to fetch s12 requisitions');
+      return res.json();
+    },
+    keepPreviousData: true,
+  });
+
+  // Normalize into array used by UI
+  const [s12Items, setS12Items] = useState<any[]>([]);
+  useEffect(() => {
+    if (!s12Resp) return;
+    const source = Array.isArray(s12Resp) ? s12Resp : (s12Resp.results || []);
+    setS12Items(source);
+  }, [s12Resp]);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -205,17 +227,21 @@ export default function S12Requisition() {
 
     // optimistic UI: show loading state while request in-flight
     setApproveLoading(true);
+    // Build payload and log for debugging
+    const payload = {
+      approver: user?.username || user?.name || "Current User",
+      level: 1,
+      decision: "approved",
+      comments: approvalRemarks,
+      override: overrideApproval,
+      items: Object.keys(quantities).map((k) => ({ requisition_item_id: k, approved_qty: quantities[k], decision: quantities[k] > 0 ? 'approved' : 'rejected' })),
+    };
+    console.debug('Approving requisition payload:', payload);
     // Call backend approval endpoint
     requisitionsApi
-      .approveRequisition(selectedRequisition.id, {
-        approver: user?.username || user?.name || "Current User",
-        level: 1,
-        decision: "approved",
-        comments: approvalRemarks,
-        override: overrideApproval,
-        items: Object.keys(quantities).map((k) => ({ requisition_item_id: k, approved_qty: quantities[k], decision: quantities[k] > 0 ? 'approved' : 'rejected' })),
-      })
+      .approveRequisition(selectedRequisition.id, payload)
       .then((res) => {
+        console.debug('Approve response:', res);
         logStoresAction("UPDATE", `Approved S12 ${selectedRequisition.s12Number}`);
         toast.success("Requisition approved");
         addNotification({ title: "S12 Requisition Approved", message: `${selectedRequisition.s12Number} approved for ${selectedRequisition.requestingDepartment}`, type: "success", link: "/stores/s12" });
@@ -226,7 +252,7 @@ export default function S12Requisition() {
         setApproveLoading(false);
       })
       .catch((err) => {
-        console.error(err);
+        console.error('Approve error:', err);
         toast.error(err?.response?.data?.error || 'Approval failed');
         setApproveLoading(false);
       });
@@ -238,13 +264,15 @@ export default function S12Requisition() {
       return;
     }
     setRejectLoading(true);
-    requisitionsApi.approveRequisition(selectedRequisition.id, {
+    const payload = {
       approver: user?.username || user?.name || "Current User",
       level: 1,
       decision: "rejected",
       comments: approvalRemarks,
       items: selectedRequisition.items.map((it) => ({ requisition_item_id: it.id, approved_qty: 0, decision: 'rejected' })),
-    }).then(() => {
+    };
+    console.debug('Rejecting requisition payload:', payload);
+    requisitionsApi.approveRequisition(selectedRequisition.id, payload).then(() => {
       logStoresAction("UPDATE", `Rejected S12 ${selectedRequisition.s12Number}`);
       toast.success("Requisition rejected");
       addNotification({ title: "S12 Requisition Rejected", message: `${selectedRequisition.s12Number} rejected — ${approvalRemarks}`, type: "error", link: "/stores/s12" });
@@ -253,7 +281,7 @@ export default function S12Requisition() {
       queryClient.invalidateQueries({ queryKey: ['s12-requisitions'] });
       setRejectLoading(false);
     }).catch((err) => {
-      console.error(err);
+      console.error('Reject error:', err);
       toast.error(err?.response?.data?.error || 'Reject failed');
       setRejectLoading(false);
     });
@@ -357,20 +385,20 @@ export default function S12Requisition() {
     a.click();
   };
 
-  const filteredRequisitions = requisitions.filter((r) => {
+  const filteredRequisitions = s12Items.filter((r) => {
     const matchesSearch =
-      r.s12Number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      r.requestingDepartment.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      r.requestedBy.toLowerCase().includes(searchTerm.toLowerCase());
+      (r.s12Number || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (r.requestingDepartment || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (r.requestedBy || '').toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === "all" || r.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
 
-  const pendingApprovals = requisitions.filter((r) => r.status === "Pending Approval").length;
-  const pendingIssues = requisitions.filter(
+  const pendingApprovals = s12Items.filter((r) => r.status === "Pending Approval").length;
+  const pendingIssues = s12Items.filter(
     (r) => r.status === "Approved" || r.status === "Partially Issued"
   ).length;
-  const thisMonthCount = requisitions.filter(
+  const thisMonthCount = s12Items.filter(
     (r) =>
       new Date(r.requestDate).getMonth() === new Date().getMonth() &&
       new Date(r.requestDate).getFullYear() === new Date().getFullYear()
@@ -441,7 +469,7 @@ export default function S12Requisition() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {requisitions.filter((r) => r.status === "Fully Issued").length}
+              {s12Items.filter((r) => r.status === "Fully Issued").length}
             </div>
             <p className="text-xs text-muted-foreground">Fully issued</p>
           </CardContent>
@@ -498,91 +526,52 @@ export default function S12Requisition() {
           </div>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>S12 Number</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Department</TableHead>
-                <TableHead>Requested By</TableHead>
-                <TableHead>Items</TableHead>
-                <TableHead>Value (KES)</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredRequisitions.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                    No requisitions found
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filteredRequisitions.map((requisition) => (
-                  <TableRow key={requisition.id}>
-                    <TableCell className="font-medium">{requisition.s12Number}</TableCell>
-                    <TableCell>
-                      {format(new Date(requisition.requestDate), "dd/MM/yyyy")}
-                    </TableCell>
-                    <TableCell>{requisition.requestingDepartment}</TableCell>
-                    <TableCell>{requisition.requestedBy}</TableCell>
-                    <TableCell>{requisition.items.length} items</TableCell>
-                    <TableCell>
-                      {requisition.items
-                        .reduce((sum, item) => sum + item.quantityRequested * item.unitPrice, 0)
-                        .toLocaleString()}
-                    </TableCell>
-                    <TableCell>{getStatusBadge(requisition.status)}</TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            setSelectedRequisition(requisition);
-                            setViewDialogOpen(true);
-                          }}
-                        >
-                          <Eye className="h-4 w-4 mr-1" />
-                          View
-                        </Button>
-                        {requisition.status === "Draft" && user?.role === "bursar" && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="gap-2"
-                            onClick={() => {
-                              setSelectedRequisition(requisition);
-                              setConfirmSubmitOpen(true);
-                            }}
-                          >
-                            <Send className="h-4 w-4" />
-                            Submit
-                          </Button>
-                        )}
-                        {requisition.status === "Pending Approval" && user?.role === "headteacher" && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="gap-2 bg-green-50 text-green-700 border-green-200 hover:bg-green-100 hover:text-green-800 hover:border-green-300 dark:bg-green-950 dark:text-green-200 dark:border-green-800 hover:dark:bg-green-900 hover:dark:text-green-100"
-                            onClick={() => {
-                              setSelectedRequisition(requisition);
-                              setApproveDialogOpen(true);
-                            }}
-                          >
-                            <ClipboardCheck className="h-4 w-4" />
-                            Review
-                          </Button>
-                        )}
-                        {/* Issue action removed: dedicated Issue Stock page handles issuance */}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+          <ReusableTable
+            columns={[
+              { key: 's12Number', title: 'S12 Number', render: (row: any) => row.s12Number },
+              { key: 'requestDate', title: 'Date', render: (row: any) => format(new Date(row.requestDate), 'dd/MM/yyyy') },
+              { key: 'requestingDepartment', title: 'Department', render: (row: any) => row.requestingDepartment },
+              { key: 'requestedBy', title: 'Requested By', render: (row: any) => row.requestedBy },
+              { key: 'items', title: 'Items', render: (row: any) => `${(row.items || []).length} items` },
+              { key: 'value', title: 'Value (KES)', align: 'right', render: (row: any) => ((row.items || []).reduce((sum: number, it: any) => sum + (it.quantityRequested || 0) * (parseFloat(it.unitPrice || 0) || 0), 0)).toLocaleString() },
+              { key: 'status', title: 'Status', render: (row: any) => getStatusBadge(row.status) },
+              { key: 'actions', title: 'Actions', align: 'right', render: (row: any) => (
+                <div className="flex justify-end gap-2">
+                  <Button variant="ghost" size="sm" onClick={() => { setSelectedRequisition(row); setViewDialogOpen(true); }}>
+                    <Eye className="h-4 w-4 mr-1" />
+                    View
+                  </Button>
+                  {row.status === 'Draft' && user?.role === 'bursar' && (
+                    <Button variant="outline" size="sm" className="gap-2" onClick={() => { setSelectedRequisition(row); setConfirmSubmitOpen(true); }}>
+                      <Send className="h-4 w-4" />
+                      Submit
+                    </Button>
+                  )}
+                  {row.status === 'Pending Approval' && user?.role === 'headteacher' && (
+                    <Button variant="outline" size="sm" className="gap-2 bg-green-50 text-green-700 border-green-200 hover:bg-green-100 hover:text-green-800 hover:border-green-300 dark:bg-green-950 dark:text-green-200 dark:border-green-800 hover:dark:bg-green-900 hover:dark:text-green-100" onClick={() => { setSelectedRequisition(row); setApproveDialogOpen(true); }}>
+                      <ClipboardCheck className="h-4 w-4" />
+                      Review
+                    </Button>
+                  )}
+                </div>
+              ) },
+            ]}
+            data={filteredRequisitions}
+            rowKey={(r: any) => r.id}
+            emptyMessage="No requisitions found"
+          />
+
+          {/* Pagination */}
+          {s12Resp && (
+            (() => {
+              const totalCount = !Array.isArray(s12Resp) ? (s12Resp.count || 0) : s12Items.length;
+              const pageSize = !Array.isArray(s12Resp) ? (s12Resp.results?.length || s12Items.length) : s12Items.length;
+              const totalPages = Math.max(1, Math.ceil(totalCount / (pageSize || 10)));
+              const from = (page - 1) * pageSize + 1;
+              const to = Math.min(totalCount, page * pageSize);
+              return <TablePagination page={page} totalPages={totalPages} from={from} to={to} total={totalCount} onPageChange={setPage} />;
+            })()
+          )}
         </CardContent>
       </Card>
 
