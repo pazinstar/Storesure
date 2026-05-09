@@ -91,6 +91,8 @@ export default function S12Requisition() {
     queryKey: ['inventory'],
     queryFn: () => api.getInventory()
   });
+  // Normalise inventory response (supports paginated {results,...} and plain array)
+  const inventoryList = Array.isArray(inventoryItems) ? inventoryItems : (inventoryItems?.results ?? []);
 
   // Open requisition detail when `?view=<id>` is present in URL
   const location = useLocation();
@@ -110,7 +112,7 @@ export default function S12Requisition() {
     }
   }, [location.search, requisitions]);
 
-  const storeItems: StoreItem[] = inventoryItems.map(item => ({
+  const storeItems: StoreItem[] = inventoryList.map(item => ({
     code: String(item.id),
     description: item.name,
     unit: item.unit,

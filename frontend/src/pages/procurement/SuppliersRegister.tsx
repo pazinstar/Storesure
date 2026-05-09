@@ -61,6 +61,7 @@ import {
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { procurementService } from "@/services/procurement.service";
+import ReusableTable, { Column } from "@/components/ui/reusable-table";
 import { TablePagination } from "@/components/ui/table-pagination";
 import { Supplier, ProcurementCategory, SupplierStatus } from "@/mock/procurement.mock";
 import { useAudit } from "@/contexts/AuditContext";
@@ -543,103 +544,57 @@ export default function SuppliersRegister() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Supplier Name</TableHead>
-                <TableHead>KRA PIN</TableHead>
-                <TableHead>Categories</TableHead>
-                <TableHead>Contact Person</TableHead>
-                <TableHead>Phone / Email</TableHead>
-                <TableHead>County</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="w-[50px]"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredSuppliers.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="h-24 text-center">
-                    <div className="flex flex-col items-center gap-2 text-muted-foreground">
-                      <Building2 className="h-8 w-8" />
-                      <p>No suppliers found</p>
-                      {!isReadOnly && (
-                        <Button variant="outline" size="sm" onClick={() => handleOpenDialog()}>
-                          Add First Supplier
-                        </Button>
-                      )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filteredSuppliers.map((supplier) => (
-                  <TableRow key={supplier.id}>
-                    <TableCell>
-                      <div>
-                        <p className="font-medium">{supplier.name}</p>
-                        {supplier.tradingName && (
-                          <p className="text-xs text-muted-foreground">
-                            t/a {supplier.tradingName}
-                          </p>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="font-mono text-sm">{supplier.taxPin}</TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap gap-1">
-                        {supplier.category.map((cat) => (
-                          <Badge key={cat} variant={getCategoryBadgeVariant(cat)} className="text-xs">
-                            {cat}
-                          </Badge>
-                        ))}
-                      </div>
-                    </TableCell>
-                    <TableCell>{supplier.contactPerson}</TableCell>
-                    <TableCell>
-                      <div className="flex flex-col gap-0.5">
-                        <div className="flex items-center gap-1 text-sm">
-                          <Phone className="h-3 w-3 text-muted-foreground" />
-                          {supplier.phone}
-                        </div>
-                        <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                          <Mail className="h-3 w-3" />
-                          {supplier.email}
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>{supplier.county}</TableCell>
-                    <TableCell>
-                      <Badge variant={getStatusBadgeVariant(supplier.status)}>
-                        {supplier.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="h-8 w-8">
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => handleOpenDialog(supplier)}>
-                            <Pencil className="mr-2 h-4 w-4" />
-                            Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => handleDeleteClick(supplier)}
-                            className="text-destructive"
-                          >
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+          {(() => {
+            const columns: Column<any>[] = [
+              { key: 'name', title: 'Supplier Name', render: (r) => (
+                <div>
+                  <p className="font-medium">{r.name}</p>
+                  {r.tradingName && <p className="text-xs text-muted-foreground">t/a {r.tradingName}</p>}
+                </div>
+              )},
+              { key: 'taxPin', title: 'KRA PIN', width: '140px', render: (r) => <span className="font-mono text-sm">{r.taxPin}</span> },
+              { key: 'categories', title: 'Categories', render: (r) => (
+                <div className="flex flex-wrap gap-1">{r.category.map((cat: string) => <Badge key={cat} variant={getCategoryBadgeVariant(cat)} className="text-xs">{cat}</Badge>)}</div>
+              )},
+              { key: 'contact', title: 'Contact Person', render: (r) => r.contactPerson },
+              { key: 'phone', title: 'Phone / Email', render: (r) => (
+                <div className="flex flex-col gap-0.5">
+                  <div className="flex items-center gap-1 text-sm"><Phone className="h-3 w-3 text-muted-foreground" />{r.phone}</div>
+                  <div className="flex items-center gap-1 text-xs text-muted-foreground"><Mail className="h-3 w-3" />{r.email}</div>
+                </div>
+              )},
+              { key: 'county', title: 'County', render: (r) => r.county },
+              { key: 'status', title: 'Status', render: (r) => <Badge variant={getStatusBadgeVariant(r.status)}>{r.status}</Badge> },
+              { key: 'actions', title: '', width: '50px', render: (r) => (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-8 w-8">
+                      <MoreHorizontal className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => handleOpenDialog(r)}>
+                      <Pencil className="mr-2 h-4 w-4" />
+                      Edit
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => handleDeleteClick(r)} className="text-destructive">
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )},
+            ];
+
+            return (
+              <ReusableTable
+                columns={columns}
+                data={filteredSuppliers}
+                rowKey={(r: any) => r.id}
+                emptyMessage={filteredSuppliers.length === 0 ? (isReadOnly ? 'No suppliers found' : 'No suppliers found') : ''}
+              />
+            );
+          })()}
         </CardContent>
       </Card>
       

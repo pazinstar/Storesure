@@ -13,6 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import ReusableTable, { Column } from "@/components/ui/reusable-table";
 import {
   Select,
   SelectContent,
@@ -321,32 +322,59 @@ export default function ItemMaster() {
     setIsViewOpen(true);
   };
 
-  const openEditDialog = (item: Item) => {
-    // Infer locationType from stored location when backend only stores `location`
-    const storedLocation = item.location || "";
-    let inferredLocationType = "";
-    if (storedLocation) {
-      if (storeLocations.includes(storedLocation)) inferredLocationType = "Stores";
-      else if (libraryLocations.includes(storedLocation)) inferredLocationType = "Library";
-      else if (departmentLocations.includes(storedLocation)) inferredLocationType = "Department";
-    }
+  const openEditDialog = async (item: Item) => {
+    try {
+      const fresh = await api.getItem(item.id) || item;
+      const storedLocation = fresh.location || item.location || "";
+      let inferredLocationType = "";
+      if (storedLocation) {
+        if (storeLocations.includes(storedLocation)) inferredLocationType = "Stores";
+        else if (libraryLocations.includes(storedLocation)) inferredLocationType = "Library";
+        else if (departmentLocations.includes(storedLocation)) inferredLocationType = "Department";
+      }
 
-    setSelectedItem(item);
-    setFormData({
-      name: item.name,
-      category: item.category,
-      assetType: item.assetType,
-      categoryType: (item as any).category_type || '',
-      unit: item.unit,
-      minimumStockLevel: String(item.minimumStockLevel),
-      reorderLevel: String(item.reorderLevel),
-      openingBalance: String(item.openingBalance),
-      expiryDate: item.expiryDate || "",
-      description: item.description || "",
-      locationType: item.locationType || inferredLocationType,
-      location: storedLocation,
-    });
-    setIsEditOpen(true);
+      setSelectedItem(fresh);
+      setFormData({
+        name: fresh.name,
+        category: fresh.category,
+        assetType: fresh.assetType,
+        categoryType: (fresh as any).category_type || '',
+        unit: fresh.unit,
+        minimumStockLevel: String(fresh.minimumStockLevel),
+        reorderLevel: String(fresh.reorderLevel),
+        openingBalance: String(fresh.openingBalance),
+        expiryDate: fresh.expiryDate || "",
+        description: fresh.description || "",
+        locationType: fresh.locationType || inferredLocationType,
+        location: storedLocation,
+      });
+      setIsEditOpen(true);
+    } catch (err) {
+      toast.error("Failed to load item details. Using available data.");
+      const storedLocation = item.location || "";
+      let inferredLocationType = "";
+      if (storedLocation) {
+        if (storeLocations.includes(storedLocation)) inferredLocationType = "Stores";
+        else if (libraryLocations.includes(storedLocation)) inferredLocationType = "Library";
+        else if (departmentLocations.includes(storedLocation)) inferredLocationType = "Department";
+      }
+      setSelectedItem(item);
+      setFormData({
+        name: item.name,
+        category: item.category,
+        assetType: item.assetType,
+        categoryType: (item as any).category_type || '',
+        unit: item.unit,
+        minimumStockLevel: String(item.minimumStockLevel),
+        reorderLevel: String(item.reorderLevel),
+        openingBalance: String(item.openingBalance),
+        expiryDate: item.expiryDate || "",
+        description: item.description || "",
+        locationType: item.locationType || inferredLocationType,
+        location: storedLocation,
+      });
+      setIsEditOpen(true);
+    }
   };
 
   const filteredItems = items.filter((item) => {
@@ -455,75 +483,55 @@ export default function ItemMaster() {
         </CardHeader>
         <CardContent>
           <div className="rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                    <TableHead>Item Code</TableHead>
-                    <TableHead>Item Name</TableHead>
-                    <TableHead>Classification</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Category</TableHead>
-                    <TableHead>Unit</TableHead>
-                    <TableHead className="text-right">Min Level</TableHead>
-                    <TableHead className="text-right">Reorder Level</TableHead>
-                    <TableHead className="text-right">Current Bal.</TableHead>
-                    <TableHead>Expiry</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredItems.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
-                      No items found
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  filteredItems.map((item) => (
-                    <TableRow key={item.id}>
-                      <TableCell className="font-mono text-sm">{item.id}</TableCell>
-                      <TableCell className="font-medium">{item.name}</TableCell>
-                      <TableCell>{item.category_type ? (CLASSIFICATION_OPTIONS.find(c => c.value === item.category_type)?.label ?? item.category_type) : '-'}</TableCell>
-                      <TableCell>{getAssetTypeBadge(item.assetType)}</TableCell>
-                      <TableCell>{item.category}</TableCell>
-                      <TableCell>{item.unit}</TableCell>
-                      <TableCell className="text-right">{item.minimumStockLevel}</TableCell>
-                      <TableCell className="text-right">{item.reorderLevel}</TableCell>
-                      <TableCell className="text-right font-semibold">{item.openingBalance}</TableCell>
-                      <TableCell className="text-muted-foreground">{formatDate(item.expiryDate)}</TableCell>
-                      <TableCell>{getStatusBadge(item.status)}</TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => openViewDialog(item)}
-                          >
-                            <Eye className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => {
-                              if (blockAction("edit items")) return;
-                              openEditDialog(item);
-                            }}
-                            disabled={isReadOnly}
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+            {
+              (() => {
+                const columns: Column<Item>[] = [
+                  { key: 'id', title: 'Item Code', width: '120px', render: (row) => <span className="font-mono text-sm">{row.id}</span> },
+                  { key: 'name', title: 'Item Name', render: (row) => <span className="font-medium">{row.name}</span> },
+                  { key: 'classification', title: 'Classification', render: (row) => row.category_type ? (CLASSIFICATION_OPTIONS.find(c => c.value === row.category_type)?.label ?? row.category_type) : '-' },
+                  { key: 'type', title: 'Type', render: (row) => getAssetTypeBadge(row.assetType) },
+                  { key: 'category', title: 'Category', render: (row) => row.category },
+                  { key: 'unit', title: 'Unit', render: (row) => row.unit },
+                  { key: 'min', title: 'Min Level', align: 'right', width: '100px', render: (row) => <span className="text-right">{row.minimumStockLevel}</span> },
+                  { key: 'reorder', title: 'Reorder Level', align: 'right', width: '110px', render: (row) => <span className="text-right">{row.reorderLevel}</span> },
+                  { key: 'current', title: 'Current Bal.', align: 'right', width: '110px', render: (row) => <span className="text-right font-semibold">{row.openingBalance}</span> },
+                  { key: 'expiry', title: 'Expiry', render: (row) => <span className="text-muted-foreground">{formatDate(row.expiryDate)}</span> },
+                  { key: 'status', title: 'Status', render: (row) => getStatusBadge(row.status) },
+                  { key: 'actions', title: 'Actions', align: 'right', width: '120px', render: (row) => (
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => openViewDialog(row)}
+                      >
+                        <Eye className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => { if (blockAction("edit items")) return; openEditDialog(row); }}
+                        disabled={isReadOnly}
+                      >
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  )},
+                ];
+
+                return (
+                  <ReusableTable
+                    columns={columns}
+                    data={filteredItems}
+                    rowKey={(r) => r.id}
+                    emptyMessage="No items found"
+                  />
+                );
+              })()
+            }
           </div>
-          <div>pages====: {page} of {totalPages}</div>
+          
           <div className="mt-4">
             <TablePagination
               page={page}

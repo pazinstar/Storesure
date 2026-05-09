@@ -158,7 +158,7 @@ function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
   return (
     <SidebarProvider>
       <AppSidebar />
-      <SidebarInset className="min-w-0 overflow-hidden">
+      <SidebarInset className="min-w-0 overflow-hidden h-screen">
         <AuditModeBanner />
         <header className="flex h-14 items-center border-b border-border px-4 lg:px-6">
           <SidebarTrigger className="-ml-2" />
