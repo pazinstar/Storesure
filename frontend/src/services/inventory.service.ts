@@ -73,17 +73,21 @@ export const inventoryService = {
         }
     },
 
-    async getInventory(): Promise<Item[]> {
+    async getInventory(page: number = 1): Promise<{ results: any[]; count: number; next: string | null; previous: string | null }> {
         if (apiConfig.useMockData) {
             await delay(SIMULATE_DELAY);
             console.log("Inventory data loading...");
             return [...MOCK_INVENTORY];
         } else {
-            const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/inventory`);
+            const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/inventory/?page=${page}`);
             if (!response.ok) throw new Error("Failed");
             const data = await response.json();
             // Handle paginated response (DRF style) or direct array
-            return data.results ? data.results : data;
+            // return data.results ? data.results : data;
+            if (Array.isArray(data)) {
+            return { results: data, count: data.length, next: null, previous: null };
+            }
+        return { results: data?.results || [], count: data?.count || 0, next: data?.next || null, previous: data?.previous || null };
         }
     },
 

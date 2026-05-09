@@ -61,6 +61,7 @@ import {
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { procurementService } from "@/services/procurement.service";
+import { TablePagination } from "@/components/ui/table-pagination";
 import { Supplier, ProcurementCategory, SupplierStatus } from "@/mock/procurement.mock";
 import { useAudit } from "@/contexts/AuditContext";
 import { useReadOnlyGuard } from "@/hooks/useReadOnlyGuard";
@@ -641,19 +642,18 @@ export default function SuppliersRegister() {
           </Table>
         </CardContent>
       </Card>
-
+      
       {/* Pagination controls */}
-      <div className="flex items-center justify-between py-4">
-        <div className="text-sm text-muted-foreground">Total: {totalCount}</div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={!suppliersResp?.previous || page <= 1}>
-            Previous
-          </Button>
-          <div className="text-sm">Page {page} / {totalPages}</div>
-          <Button size="sm" variant="outline" onClick={() => setPage((p) => (p < totalPages ? p + 1 : p))} disabled={!suppliersResp?.next || page >= totalPages}>
-            Next
-          </Button>
-        </div>
+      <div className="py-4">
+        <TablePagination
+          page={page}
+          totalPages={totalPages}
+          from={(page - 1) * pageSize + 1}
+          to={Math.min(totalCount, page * pageSize)}
+          total={totalCount}
+          onPageChange={(p) => setPage(p)}
+        />
+        
       </div>
 
       {/* Add/Edit Dialog */}

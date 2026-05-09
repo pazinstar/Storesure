@@ -65,6 +65,7 @@ interface Item {
 }
 
 import { api } from "@/services/api";
+import { TablePagination } from "@/components/ui/table-pagination";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 export default function ItemMaster() {
@@ -522,33 +523,16 @@ export default function ItemMaster() {
               </TableBody>
             </Table>
           </div>
-          <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">
-            <p>Showing {filteredItems.length} of {totalCount} items</p>
-            <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" onClick={() => {
-                if (!hasPrevious) return;
-                if (inventoryResp && !Array.isArray(inventoryResp) && inventoryResp.previous) {
-                  try { const u = new URL(inventoryResp.previous); const p = u.searchParams.get('page'); if (p) return setPage(Number(p)); } catch(e) {}
-                }
-                setPage(p => Math.max(1, p - 1));
-              }} disabled={!hasPrevious}>
-                Previous
-              </Button>
-              <div>Page {page} / {totalPages}</div>
-              <Button size="sm" variant="outline" onClick={() => {
-                if (!hasNext) return;
-                if (inventoryResp && !Array.isArray(inventoryResp) && inventoryResp.next) {
-                  try { const u = new URL(inventoryResp.next); const p = u.searchParams.get('page'); if (p) return setPage(Number(p)); } catch(e) {}
-                }
-                setPage(p => (p < totalPages ? p + 1 : p));
-              }} disabled={!hasNext}>
-                Next
-              </Button>
-            </div>
-          </div>
-          <div className="mt-2 text-xs text-muted-foreground">
-            <div>debug: next={String(inventoryResp && !Array.isArray(inventoryResp) ? inventoryResp.next : '')} previous={String(inventoryResp && !Array.isArray(inventoryResp) ? inventoryResp.previous : '')}</div>
-            <div>debug: page={page} totalPages={totalPages} pageSize={pageSize} totalCount={totalCount} hasNext={String(hasNext)} hasPrevious={String(hasPrevious)}</div>
+          <div>pages====: {page} of {totalPages}</div>
+          <div className="mt-4">
+            <TablePagination
+              page={page}
+              totalPages={totalPages}
+              from={(page - 1) * pageSize + 1}
+              to={Math.min(totalCount, page * pageSize)}
+              total={totalCount}
+              onPageChange={(p) => setPage(p)}
+            />
           </div>
         </CardContent>
       </Card>
