@@ -79,11 +79,13 @@ export default function RIAList() {
   const { data: settings } = useQuery({ queryKey: ["inventory-settings"], queryFn: api.getInventorySettings });
   const { data: storeItems } = useQuery({ queryKey: ["store-items"], queryFn: api.getStoreItems });
   const { data: inventoryItems = [] } = useQuery({ queryKey: ["inventory"], queryFn: () => api.getInventory() });
+  // Normalize inventory response to support paginated {results,...} or plain array
+  const inventoryList = Array.isArray(inventoryItems) ? inventoryItems : (inventoryItems?.results ?? []);
 
   const receivingUnits = settings?.departmentLocations || [
     "Kitchen", "Science Lab", "Boarding", "Administration", "Sports", "Library", "Sanitation"
   ];
-  const comboboxItems: StoreItem[] = inventoryItems.map(i => ({ code: String(i.id), description: i.name, unit: i.unit, assetType: "Consumable" as const }));
+  const comboboxItems: StoreItem[] = inventoryList.map(i => ({ code: String(i.id), description: i.name, unit: i.unit, assetType: "Consumable" as const }));
 
   const filtered = useMemo(() => {
     let list = rias || [];
