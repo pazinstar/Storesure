@@ -333,6 +333,27 @@ export const inventoryService = {
         }
     },
 
+    // Paginated deliveries (DRF-style)
+    async getDeliveriesPaginated(page: number = 1): Promise<{ results: DeliveryRecord[]; count: number; next: string | null; previous: string | null }> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            const pageSize = 10;
+            const start = (page - 1) * pageSize;
+            const results = MOCK_DELIVERIES.slice(start, start + pageSize);
+            const next = start + pageSize < MOCK_DELIVERIES.length ? `${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/deliveries/?page=${page + 1}` : null;
+            const previous = page > 1 ? `${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/deliveries/?page=${page - 1}` : null;
+            return { results, count: MOCK_DELIVERIES.length, next, previous };
+        }
+        const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/deliveries/?page=${page}`);
+        if (!response.ok) {
+            console.warn('Deliveries API failed, returning empty page:', response.status);
+            return { results: [], count: 0, next: null, previous: null };
+        }
+        const data = await response.json();
+        if (Array.isArray(data)) return { results: data, count: data.length, next: null, previous: null };
+        return { results: data?.results || [], count: data?.count || 0, next: data?.next || null, previous: data?.previous || null };
+    },
+
     async updateInspectionItems(deliveryId: string, items: InspectionItem[]): Promise<DeliveryRecord> {
         if (apiConfig.useMockData) {
             await delay(SIMULATE_DELAY);

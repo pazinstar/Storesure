@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { DeliveryRecord, InspectionItem, InspectionDecision } from "@/mock/data";
 import { api } from "@/services/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import ReusableTable from "@/components/ui/reusable-table";
+import { TablePagination } from "@/components/ui/table-pagination";
 import { toast } from "sonner";
 import { useNotifications } from "@/contexts/NotificationContext";
 import {
@@ -76,10 +78,17 @@ export default function InspectionAcceptance() {
   const { user } = useAuth();
   const { addNotification } = useNotifications();
   const queryClient = useQueryClient();
-  const { data: deliveries = [], isLoading } = useQuery({
-    queryKey: ['deliveries'],
-    queryFn: () => api.getDeliveries()
+  const [page, setPage] = useState<number>(1);
+  const { data: delResp, isLoading } = useQuery({
+    queryKey: ['deliveries', page],
+    queryFn: () => api.getDeliveriesPaginated(page),
+    keepPreviousData: true,
   });
+  const [deliveries, setDeliveries] = useState<DeliveryRecord[]>([]);
+  useEffect(() => {
+    if (!delResp) return;
+    setDeliveries(Array.isArray(delResp) ? delResp : (delResp.results || []));
+  }, [delResp]);
 
   // Get user's role for signature matching
   const userRole = useMemo(() => {
@@ -388,59 +397,34 @@ export default function InspectionAcceptance() {
           </div>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Delivery ID</TableHead>
-                <TableHead>Supplier</TableHead>
-                <TableHead>LPO Reference</TableHead>
-                <TableHead>Delivery Date</TableHead>
-                <TableHead className="text-center">Signatures</TableHead>
-                <TableHead className="text-right">Action</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredDeliveries.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                    No pending inspections found
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filteredDeliveries.map((delivery) => (
-                  <TableRow key={delivery.id}>
-                    <TableCell className="font-mono font-medium">
-                      {delivery.deliveryId}
-                    </TableCell>
-                    <TableCell>{delivery.supplierName}</TableCell>
-                    <TableCell className="font-mono text-sm">
-                      {delivery.lpoReference}
-                    </TableCell>
-                    <TableCell>
-                      {new Date(delivery.dateTime).toLocaleDateString("en-GB", {
-                        day: "2-digit",
-                        month: "short",
-                        year: "numeric",
-                      })}
-                    </TableCell>
-                    <TableCell className="text-center">
-                      {getProgressBadge(delivery)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        size="sm"
-                        onClick={() => handleOpenInspection(delivery)}
-                        disabled={isReadOnly}
-                      >
-                        <ClipboardCheck className="h-4 w-4 mr-1" />
-                        Inspect
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+          <ReusableTable
+            columns={[
+              { key: 'deliveryId', title: 'Delivery ID', render: (r: any) => r.deliveryId },
+              { key: 'supplierName', title: 'Supplier', render: (r: any) => r.supplierName },
+              { key: 'lpoReference', title: 'LPO Reference', render: (r: any) => r.lpoReference },
+              { key: 'date', title: 'Delivery Date', render: (r: any) => new Date(r.dateTime).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) },
+              { key: 'signatures', title: 'Signatures', align: 'center', render: (r: any) => getProgressBadge(r) },
+              { key: 'actions', title: 'Action', align: 'right', render: (r: any) => (
+                <Button size="sm" onClick={() => handleOpenInspection(r)} disabled={isReadOnly}>
+                  <ClipboardCheck className="h-4 w-4 mr-1" />
+                  Inspect
+                </Button>
+              )},
+            ]}
+            data={filteredDeliveries}
+            rowKey={(r: any) => r.id}
+            emptyMessage="No pending inspections found"
+          />
+
+          {delResp && (() => {
+            const totalCount = Array.isArray(delResp) ? delResp.length : (delResp.count || 0);
+            const pageSize = Array.isArray(delResp) ? (delResp.length || 10) : (delResp.results?.length || 10);
+            const totalPages = Math.max(1, Math.ceil(totalCount / (pageSize || 10)));
+            const from = (page - 1) * pageSize + 1;
+            const to = Math.min(totalCount, page * pageSize);
+            return <TablePagination page={page} totalPages={totalPages} from={from} to={to} total={totalCount} onPageChange={setPage} />;
+          })()}
+          
         </CardContent>
       </Card>
 

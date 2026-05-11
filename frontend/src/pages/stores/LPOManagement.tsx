@@ -1,6 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
+import { apiConfig } from "@/services/api";
+import ReusableTable, { Column } from "@/components/ui/reusable-table";
+import { TablePagination } from "@/components/ui/table-pagination";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -105,10 +108,24 @@ export default function LPOManagementPage() {
     queryKey: ['lpo-stats'],
     queryFn: () => api.getLPOStats()
   });
-  const { data: lpos = [], isLoading: isLoadingLPOs } = useQuery<LPO[]>({
-    queryKey: ['lpos'],
-    queryFn: () => api.getLPOs()
+  // Paginated LPOs (supports DRF paginated response)
+  const [page, setPage] = useState<number>(1);
+  const { data: lpoResp, isLoading: isLoadingLPOs } = useQuery({
+    queryKey: ['lpos', page],
+    queryFn: async () => {
+      const res = await fetch(`${apiConfig.baseUrl}/procurement/lpos/?page=${page}`);
+      if (!res.ok) throw new Error('Failed to fetch LPOs');
+      return res.json();
+    },
+    keepPreviousData: true,
   });
+
+  const [lpos, setLpos] = useState<any[]>([]);
+  useEffect(() => {
+    if (!lpoResp) return;
+    const source = Array.isArray(lpoResp) ? lpoResp : (lpoResp.results || []);
+    setLpos(source);
+  }, [lpoResp]);
 
   const { data: suppliersResp } = useQuery({
     queryKey: ["suppliers", 1],
@@ -432,7 +449,8 @@ export default function LPOManagementPage() {
   };
 
   const getNextLPONumber = () => {
-    return `LPO-${new Date().getFullYear()}-${String(lpos.length + 1).padStart(3, "0")}`;
+    const total = Array.isArray(lpoResp) ? lpoResp.length : (lpoResp?.count || (lpos?.length || 0));
+    return `LPO-${new Date().getFullYear()}-${String((total || 0) + 1).padStart(3, "0")}`;
   };
 
 
@@ -725,93 +743,65 @@ export default function LPOManagementPage() {
         <CardContent>
           {filteredLPOs.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              {lpos.length === 0
+              {(!lpoResp || (Array.isArray(lpoResp) ? lpoResp.length === 0 : (lpoResp.count || 0) === 0))
                 ? "No LPOs created yet. Click 'Create LPO' to add your first order."
                 : "No LPOs match your search criteria."
               }
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>LPO No.</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Supplier</TableHead>
-                  <TableHead>Req. Ref</TableHead>
-                  <TableHead>Items</TableHead>
-                  <TableHead>Value</TableHead>
-                  <TableHead>Delivery</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Payment</TableHead>
-                  <TableHead>GRNs</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredLPOs.map((lpo) => (
-                  <TableRow key={lpo.id}>
-                    <TableCell className="font-mono font-medium">{lpo.lpoNumber}</TableCell>
-                    <TableCell>{lpo.date}</TableCell>
-                    <TableCell className="max-w-[150px] truncate">{lpo.supplierName}</TableCell>
-                    <TableCell>
-                      {lpo.requisitionRef ? (
-                        <Badge variant="outline">{lpo.requisitionRef}</Badge>
-                      ) : "-"}
-                    </TableCell>
-                    <TableCell>{lpo.items?.length || 0}</TableCell>
-                    <TableCell className="font-semibold">
-                      KES {lpo.totalValue.toLocaleString("en-KE")}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Progress value={getDeliveryProgress(lpo)} className="h-2 w-16" />
-                        <span className="text-xs text-muted-foreground">
-                          {getDeliveryProgress(lpo)}%
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>{getStatusBadge(lpo.status)}</TableCell>
-                    <TableCell>{getPaymentBadge(lpo.paymentStatus)}</TableCell>
-                    <TableCell>
-                      {lpo.linkedGRNs && lpo.linkedGRNs.length > 0 ? (
-                        <Badge variant="outline" className="gap-1">
-                          <Link2 className="h-3 w-3" />
-                          {lpo.linkedGRNs.length}
-                        </Badge>
-                      ) : "-"}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" onClick={() => handleViewLPO(lpo)}>
-                          <Eye className="h-4 w-4" />
+            <>
+              <ReusableTable
+                columns={[
+                  { key: 'lpoNumber', title: 'LPO No.', render: (row: any) => row.lpoNumber },
+                  { key: 'date', title: 'Date', render: (row: any) => row.date || '-' },
+                  { key: 'supplierName', title: 'Supplier', render: (row: any) => row.supplierName },
+                  { key: 'requisitionRef', title: 'Req. Ref', render: (row: any) => row.requisitionRef ? <Badge variant="outline">{row.requisitionRef}</Badge> : '-' },
+                  { key: 'items', title: 'Items', render: (row: any) => (row.items?.length || 0) },
+                  { key: 'totalValue', title: 'Value', align: 'right', render: (row: any) => `KES ${Number(row.totalValue || 0).toLocaleString('en-KE')}` },
+                  { key: 'delivery', title: 'Delivery', render: (row: any) => (
+                    <div className="flex items-center gap-2">
+                      <Progress value={getDeliveryProgress(row)} className="h-2 w-16" />
+                      <span className="text-xs text-muted-foreground">{getDeliveryProgress(row)}%</span>
+                    </div>
+                  )},
+                  { key: 'status', title: 'Status', render: (row: any) => getStatusBadge(row.status) },
+                  { key: 'payment', title: 'Payment', render: (row: any) => getPaymentBadge(row.paymentStatus) },
+                  { key: 'grns', title: 'GRNs', render: (row: any) => (row.linkedGRNs && row.linkedGRNs.length > 0 ? <Badge variant="outline" className="gap-1"><Link2 className="h-3 w-3" />{row.linkedGRNs.length}</Badge> : '-') },
+                  { key: 'actions', title: 'Actions', align: 'right', render: (row: any) => (
+                    <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="icon" onClick={() => handleViewLPO(row)}>
+                        <Eye className="h-4 w-4" />
+                      </Button>
+                      <Button variant="ghost" size="icon" onClick={() => handlePrintLPO(row, 'original')}>
+                        <Printer className="h-4 w-4" />
+                      </Button>
+                      {row.status === 'Pending Approval' && !isReadOnly && (
+                        <Button variant="ghost" size="icon" onClick={() => handleStatusUpdate(row, 'Approved')}>
+                          <CheckCircle className="h-4 w-4 text-primary" />
                         </Button>
-                        <Button variant="ghost" size="icon" onClick={() => handlePrintLPO(lpo, "original")}>
-                          <Printer className="h-4 w-4" />
+                      )}
+                      {row.status === 'Approved' && !isReadOnly && (
+                        <Button variant="ghost" size="icon" onClick={() => handleStatusUpdate(row, 'Sent to Supplier')}>
+                          <Send className="h-4 w-4 text-info" />
                         </Button>
-                        {lpo.status === "Pending Approval" && !isReadOnly && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleStatusUpdate(lpo, "Approved")}
-                          >
-                            <CheckCircle className="h-4 w-4 text-primary" />
-                          </Button>
-                        )}
-                        {lpo.status === "Approved" && !isReadOnly && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleStatusUpdate(lpo, "Sent to Supplier")}
-                          >
-                            <Send className="h-4 w-4 text-info" />
-                          </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                      )}
+                    </div>
+                  )},
+                ]}
+                data={filteredLPOs}
+                rowKey={(r: any) => r.id}
+                emptyMessage="No LPOs found"
+              />
+              
+              {lpoResp && (() => {
+                const totalCount = Array.isArray(lpoResp) ? lpoResp.length : (lpoResp.count || 0);
+                const pageSize = Array.isArray(lpoResp) ? (lpoResp.length || 10) : (lpoResp.results?.length || 10);
+                const totalPages = Math.max(1, Math.ceil(totalCount / (pageSize || 10)));
+                const from = (page - 1) * pageSize + 1;
+                const to = Math.min(totalCount, page * pageSize);
+                return <TablePagination page={page} totalPages={totalPages} from={from} to={to} total={totalCount} onPageChange={setPage} />;
+              })()}
+            </>
           )}
         </CardContent>
       </Card>

@@ -1,4 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import ReusableTable from "@/components/ui/reusable-table";
+import { TablePagination } from "@/components/ui/table-pagination";
+import { api, apiConfig } from "@/services/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -14,7 +17,6 @@ import { LPO } from "@/mock/data";
 import { useDelivery, generateDeliveryId } from "@/contexts/DeliveryContext";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/services/api";
 import { DeliveryStatus } from "@/mock/data";
 import {
   Table,
@@ -70,10 +72,18 @@ export default function DeliveryLogging() {
   const { isReadOnly, blockAction } = useReadOnlyGuard();
   const { user } = useAuth();
 
-  const { data: lpos = [] } = useQuery({
-    queryKey: ['lpos'],
-    queryFn: () => api.getLPOs()
+  // Paginated LPOs for select
+  const [lpoPage, setLpoPage] = useState(1);
+  const { data: lpoResp } = useQuery({
+    queryKey: ['lpos', lpoPage],
+    queryFn: () => api.getLPOsPaginated(lpoPage),
+    keepPreviousData: true,
   });
+  const [lpos, setLpos] = useState<any[]>([]);
+  useEffect(() => {
+    if (!lpoResp) return;
+    setLpos(Array.isArray(lpoResp) ? lpoResp : (lpoResp.results || []));
+  }, [lpoResp]);
 
   const getPendingDeliveryLPOs = () => {
     return lpos.filter((lpo: LPO) =>
@@ -95,6 +105,19 @@ export default function DeliveryLogging() {
   });
 
   const availableLPOs = getPendingDeliveryLPOs() || [];
+
+  // Paginated deliveries (server)
+  const [delPage, setDelPage] = useState<number>(1);
+  const { data: delResp, isLoading: isLoadingDel } = useQuery({
+    queryKey: ['procure-deliveries', delPage],
+    queryFn: () => api.getProcurementDeliveriesPaginated(delPage),
+    keepPreviousData: true,
+  });
+  const [serverDeliveries, setServerDeliveries] = useState<any[]>([]);
+  useEffect(() => {
+    if (!delResp) return;
+    setServerDeliveries(Array.isArray(delResp) ? delResp : (delResp.results || []));
+  }, [delResp]);
 
   const handleLpoSelect = (lpoNumber: string) => {
     setSelectedLpo(lpoNumber);
@@ -529,63 +552,42 @@ export default function DeliveryLogging() {
         </CardHeader>
         <CardContent>
           <div className="rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Delivery ID</TableHead>
-                  <TableHead>Date & Time</TableHead>
-                  <TableHead>Supplier</TableHead>
-                  <TableHead>LPO Ref</TableHead>
-                  <TableHead>Packages</TableHead>
-                  <TableHead>Condition</TableHead>
-                  <TableHead>Location</TableHead>
-                  <TableHead>Received By</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredDeliveries.map((delivery) => (
-                  <TableRow key={delivery.id}>
-                    <TableCell className="font-mono text-sm font-medium">
-                      {delivery.deliveryId}
-                    </TableCell>
-                    <TableCell>
-                      {new Date(delivery.dateTime).toLocaleString('en-GB', {
-                        day: '2-digit',
-                        month: 'short',
-                        year: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </TableCell>
-                    <TableCell>{delivery.supplierName}</TableCell>
-                    <TableCell className="font-mono text-sm">{delivery.lpoReference}</TableCell>
-                    <TableCell>{delivery.packages}</TableCell>
-                    <TableCell>
-                      <span className={delivery.condition.includes("damage") ? "text-destructive" : ""}>
-                        {delivery.condition}
-                      </span>
-                    </TableCell>
-                    <TableCell>{delivery.storageLocation}</TableCell>
-                    <TableCell>{delivery.receivedBy}</TableCell>
-                    <TableCell>{getStatusBadge(delivery.status)}</TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        {delivery.status === "Awaiting Inspection" && (
-                          <Button variant="ghost" size="sm" className="h-7 text-xs gap-1">
-                            <ArrowRight className="h-3 w-3" /> To Inspection
-                          </Button>
-                        )}
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
-                          <Eye className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <ReusableTable
+              columns={[
+                { key: 'deliveryId', title: 'Delivery ID', render: (r: any) => r.deliveryId },
+                { key: 'dateTime', title: 'Date & Time', render: (r: any) => new Date(r.dateTime).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) },
+                { key: 'supplierName', title: 'Supplier', render: (r: any) => r.supplierName },
+                { key: 'lpoReference', title: 'LPO Ref', render: (r: any) => r.lpoReference },
+                { key: 'packages', title: 'Packages', render: (r: any) => r.packages },
+                { key: 'condition', title: 'Condition', render: (r: any) => <span className={r.condition?.includes('damage') ? 'text-destructive' : ''}>{r.condition}</span> },
+                { key: 'location', title: 'Location', render: (r: any) => r.storageLocation },
+                { key: 'receivedBy', title: 'Received By', render: (r: any) => r.receivedBy },
+                { key: 'status', title: 'Status', render: (r: any) => getStatusBadge(r.status) },
+                { key: 'actions', title: 'Actions', align: 'right', render: (r: any) => (
+                  <div className="flex justify-end gap-1">
+                    {r.status === 'Awaiting Inspection' && (
+                      <Button variant="ghost" size="sm" className="h-7 text-xs gap-1">
+                        <ArrowRight className="h-3 w-3" /> To Inspection
+                      </Button>
+                    )}
+                    <Button variant="ghost" size="icon" className="h-8 w-8">
+                      <Eye className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ) },
+              ]}
+              data={serverDeliveries}
+              rowKey={(r: any) => r.id}
+            />
+
+            {delResp && (() => {
+              const totalCount = Array.isArray(delResp) ? delResp.length : (delResp.count || 0);
+              const pageSize = Array.isArray(delResp) ? (delResp.length || 10) : (delResp.results?.length || 10);
+              const totalPages = Math.max(1, Math.ceil(totalCount / (pageSize || 10)));
+              const from = (delPage - 1) * pageSize + 1;
+              const to = Math.min(totalCount, delPage * pageSize);
+              return <TablePagination page={delPage} totalPages={totalPages} from={from} to={to} total={totalCount} onPageChange={setDelPage} />;
+            })()}
           </div>
         </CardContent>
       </Card>
