@@ -16,6 +16,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import ReusableTable, { Column } from "@/components/ui/reusable-table";
+import { TablePagination } from "@/components/ui/table-pagination";
 import {
   Select,
   SelectContent,
@@ -45,9 +47,12 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { S13Record } from "@/mock/data";
 
 export default function IssueStock() {
-  const { data: initialRecords = [] } = useQuery({
-    queryKey: ['s13-records'],
-    queryFn: () => api.getS13Records()
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState<number>(1);
+  const { data: pageData, isLoading: pageLoading } = useQuery({
+    queryKey: ['s13-records', page],
+    queryFn: () => api.getS13RecordsPaginated(page),
+    keepPreviousData: true,
   });
   const { data: settings } = useQuery({
     queryKey: ['inventory-settings'],
@@ -65,10 +70,10 @@ export default function IssueStock() {
   const [records, setRecords] = useState<S13Record[]>([]);
   const queryClient = useQueryClient();
   useEffect(() => {
-    if (initialRecords.length > 0 && records.length === 0) {
-      setRecords(initialRecords);
+    if (pageData && Array.isArray(pageData.results)) {
+      setRecords(pageData.results);
     }
-  }, [initialRecords]);
+  }, [pageData]);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
@@ -147,7 +152,12 @@ export default function IssueStock() {
     mutationFn: (newRecord: Omit<S13Record, "id">) => api.createS13Record(newRecord),
     onSuccess: (savedRecord) => {
       setRecords(prev => [savedRecord, ...prev]);
-      queryClient.setQueryData(['s13-records'], (oldData: any) => [savedRecord, ...(oldData || [])]);
+      // Update first page cache if present, then invalidate to refresh
+      queryClient.setQueryData(['s13-records', 1], (oldData: any) => {
+        if (!oldData) return oldData;
+        return { ...oldData, results: [savedRecord, ...(oldData.results || [])], count: (oldData.count || 0) + 1 };
+      });
+      setPage(1);
       queryClient.invalidateQueries(['s13-records']);
       toast.success("Items issued successfully via API");
       addNotification({ title: "Stock Issued (S13)", message: `${savedRecord.id} — ${savedRecord.department}`, type: "success", link: "/stores/issue" });
@@ -643,55 +653,47 @@ export default function IssueStock() {
         </CardHeader>
         <CardContent>
           <div className="rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>S13 Number</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Department</TableHead>
-                  <TableHead>Requested By</TableHead>
-                  <TableHead className="text-right">Items</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {records.filter(r => {
-                  if (!searchTerm) return true;
-                  const q = searchTerm.toLowerCase();
-                  return (
-                    String(r.id).toLowerCase().includes(q) ||
-                    String(r.department || '').toLowerCase().includes(q) ||
-                    String(r.requestedBy || '').toLowerCase().includes(q) ||
-                    String(r.status || '').toLowerCase().includes(q)
-                  );
-                }).map((record) => (
-                  <TableRow key={record.id}>
-                    <TableCell className="font-mono text-sm font-medium">{record.id}</TableCell>
-                    <TableCell>{record.date}</TableCell>
-                    <TableCell>{record.department}</TableCell>
-                    <TableCell>{record.requestedBy}</TableCell>
-                    <TableCell className="text-right">{record.items}</TableCell>
-                    <TableCell>{getStatusBadge(record.status)}</TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleViewS13(record.id)}>
-                          <Eye className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => handlePrintS13(record)}
-                        >
-                          <Printer className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            {/** Reusable table showing current page results **/}
+            <ReusableTable
+              columns={([
+                { key: 'id', title: 'S13 Number', width: '160px', render: (r: S13Record) => <span className="font-mono text-sm font-medium">{r.id}</span> },
+                { key: 'date', title: 'Date', width: '120px' },
+                { key: 'department', title: 'Department' },
+                { key: 'requestedBy', title: 'Requested By' },
+                { key: 'items', title: 'Items', align: 'right', width: '90px' },
+                { key: 'status', title: 'Status', width: '140px', render: (r: S13Record) => getStatusBadge(r.status) },
+                { key: 'actions', title: 'Actions', align: 'right', width: '110px', render: (r: S13Record) => (
+                  <div className="flex justify-end gap-1">
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleViewS13(r.id)}>
+                      <Eye className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handlePrintS13(r)}>
+                      <Printer className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ) },
+              ] as Column<S13Record>[])}
+              data={(records || []).filter(r => {
+                if (!searchTerm) return true;
+                const q = searchTerm.toLowerCase();
+                return (
+                  String(r.id).toLowerCase().includes(q) ||
+                  String(r.department || '').toLowerCase().includes(q) ||
+                  String(r.requestedBy || '').toLowerCase().includes(q) ||
+                  String(r.status || '').toLowerCase().includes(q)
+                );
+              })}
+              rowKey={(r) => r.id}
+              emptyMessage={pageLoading ? 'Loading...' : 'No S13 records found'}
+            />
+            <TablePagination
+              page={page}
+              totalPages={Math.max(1, Math.ceil(((pageData?.count) || 0) / PAGE_SIZE))}
+              from={((page - 1) * PAGE_SIZE) + (pageData && pageData.count > 0 ? 1 : 0)}
+              to={Math.min(page * PAGE_SIZE, pageData?.count || 0)}
+              total={pageData?.count || 0}
+              onPageChange={(p) => setPage(p)}
+            />
           </div>
         </CardContent>
       </Card>

@@ -16,6 +16,8 @@ import { useNotifications } from "@/contexts/NotificationContext";
 import { api } from "@/services/api";
 import { assetsService } from '@/services/assets.service';
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import ReusableTable, { Column } from '@/components/ui/reusable-table';
+import { TablePagination } from '@/components/ui/table-pagination';
 import { DocumentStatus, S11Record } from "@/mock/data";
 import {
   Table,
@@ -56,10 +58,13 @@ interface SelectedLPOData {
 }
 
 export default function ReceiveStock() {
-  const { data: initialRecords = [] } = useQuery({
-    queryKey: ['s11-records'],
-    queryFn: () => api.getS11Records()
+  const [page, setPage] = useState(1);
+  const { data: pageData, isLoading: isPageLoading } = useQuery({
+    queryKey: ['s11-records', page],
+    queryFn: () => api.getS11RecordsPaginated(page),
+    keepPreviousData: true,
   });
+
   const { data: s11Stats } = useQuery({
     queryKey: ['s11-stats'],
     queryFn: () => api.getS11Stats(),
@@ -75,10 +80,8 @@ export default function ReceiveStock() {
   const [records, setRecords] = useState<S11Record[]>([]);
   const queryClient = useQueryClient();
   useEffect(() => {
-    if (initialRecords.length > 0 && records.length === 0) {
-      setRecords(initialRecords);
-    }
-  }, [initialRecords]);
+    if (pageData?.results && records.length === 0) setRecords(pageData.results);
+  }, [pageData]);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -494,6 +497,32 @@ export default function ReceiveStock() {
     }
   };
 
+  // Table columns for ReusableTable
+  const columns: Column<any>[] = [
+    { key: 'id', title: 'GRN Number', width: '140px', render: (row) => <div className="font-mono text-sm font-medium">{row.id}</div> },
+    { key: 'date', title: 'Date', width: '120px' },
+    { key: 'source', title: 'Source', render: (row) => <div className="space-y-0.5"><div className="text-xs text-muted-foreground">{row.sourceType}</div><div>{row.supplier}</div></div> },
+    { key: 'storeLocation', title: 'Store Location', width: '160px' },
+    { key: 'items', title: 'Items', align: 'right', width: '80px', render: (row) => typeof row.items === 'number' ? row.items : (row.items ? row.items.length : '-') },
+    { key: 'totalValue', title: 'Total Value', align: 'right', width: '140px', render: (row) => (Number(row.totalValue ?? row.amount ?? 0) || 0).toLocaleString() },
+    { key: 'signedBy', title: 'Signed By', width: '180px', render: (row) => row.storekeeperSignature ? (<div className="space-y-0.5"><div className="font-medium text-sm">{row.storekeeperSignature}</div><div className="text-xs text-muted-foreground">{row.signedAt}</div></div>) : (<span className="text-xs text-muted-foreground italic">Pending</span>) },
+    { key: 'status', title: 'Status', width: '120px', render: (row) => getStatusBadge(row.status) },
+    { key: 'actions', title: 'Actions', align: 'right', width: '180px', render: (row) => (
+      <div className="flex justify-end gap-1">
+        {getNextAction(row.status, row.id)}
+        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleViewS11(row.id)}>
+          <Eye className="h-4 w-4" />
+        </Button>
+        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handlePrintS11(row)}>
+          <Printer className="h-4 w-4" />
+        </Button>
+        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => { if (blockAction('delete records')) return; if (confirm(`Delete GRN ${row.id}?`)) deleteS11Mutation.mutate(row.id); }}>
+          <XCircle className="h-4 w-4" />
+        </Button>
+      </div>
+    ) }
+  ];
+
   return (
     <div className="flex-1 space-y-6 p-8">
       <div className="flex items-center justify-between">
@@ -884,74 +913,31 @@ export default function ReceiveStock() {
         </CardHeader>
         <CardContent>
           <div className="rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>GRN Number</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Source</TableHead>
-                  <TableHead>Store Location</TableHead>
-                  <TableHead className="text-right">Items</TableHead>
-                  <TableHead className="text-right">Total Value</TableHead>
-                  <TableHead>Signed By</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {records.filter(r => {
-                  if (!searchTerm) return true;
-                  const q = searchTerm.toLowerCase();
-                  return (
-                    String(r.id).toLowerCase().includes(q) ||
-                    String(r.supplier || '').toLowerCase().includes(q) ||
-                    String(r.storeLocation || '').toLowerCase().includes(q) ||
-                    String(r.status || '').toLowerCase().includes(q)
-                  );
-                }).map((record) => (
-                  <TableRow key={record.id}>
-                    <TableCell className="font-mono text-sm font-medium">{record.id}</TableCell>
-                    <TableCell>{record.date}</TableCell>
-                    <TableCell>
-                      <div className="space-y-0.5">
-                        <div className="text-xs text-muted-foreground">{record.sourceType}</div>
-                        <div>{record.supplier}</div>
-                      </div>
-                    </TableCell>
-                    <TableCell>{record.storeLocation}</TableCell>
-                    <TableCell className="text-right">{record.items}</TableCell>
-                    <TableCell className="text-right font-semibold">{(record.totalValue ?? record.amount) as any}</TableCell>
-                    <TableCell>
-                      {record.storekeeperSignature ? (
-                        <div className="space-y-0.5">
-                          <div className="font-medium text-sm">{record.storekeeperSignature}</div>
-                          <div className="text-xs text-muted-foreground">{record.signedAt}</div>
-                        </div>
-                      ) : (
-                        <span className="text-xs text-muted-foreground italic">Pending</span>
-                      )}
-                    </TableCell>
-                    <TableCell>{getStatusBadge(record.status)}</TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        {getNextAction(record.status, record.id)}
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleViewS11(record.id)}>
-                          <Eye className="h-4 w-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handlePrintS11(record)}>
-                          <Printer className="h-4 w-4" />
-                        </Button>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => { if (blockAction('delete records')) return; if (confirm(`Delete GRN ${record.id}?`)) deleteS11Mutation.mutate(record.id); }}>
-                              <XCircle className="h-4 w-4" />
-                            </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <ReusableTable
+              columns={columns}
+              data={(pageData?.results || []).filter((r: any) => {
+                if (!searchTerm) return true;
+                const q = searchTerm.toLowerCase();
+                return (
+                  String(r.id).toLowerCase().includes(q) ||
+                  String(r.supplier || '').toLowerCase().includes(q) ||
+                  String(r.storeLocation || '').toLowerCase().includes(q) ||
+                  String(r.status || '').toLowerCase().includes(q)
+                );
+              })}
+              rowKey={(r: any) => r.id}
+            />
           </div>
         </CardContent>
+
+        <TablePagination
+          page={page}
+          totalPages={pageData && pageData.count ? Math.max(1, Math.ceil((pageData.count || 0) / (pageData.results?.length || 10))) : 1}
+          from={(page - 1) * (pageData?.results?.length || 10) + 1}
+          to={(page - 1) * (pageData?.results?.length || 10) + (pageData?.results?.length || 0)}
+          total={pageData?.count || 0}
+          onPageChange={(p) => setPage(p)}
+        />
       </Card>
 
       {/* Print Dialog */}

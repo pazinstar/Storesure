@@ -195,6 +195,44 @@ export const inventoryService = {
             return data.results ? data.results : data;
         }
     },
+    
+    // Paginated S13 records (DRF-style)
+    async getS13RecordsPaginated(page: number = 1): Promise<{ results: S13Record[]; count: number; next: string | null; previous: string | null }> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            const pageSize = 10;
+            const start = (page - 1) * pageSize;
+            const results = MOCK_S13_RECORDS.slice(start, start + pageSize);
+            const next = start + pageSize < MOCK_S13_RECORDS.length ? `${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/issue/?page=${page + 1}` : null;
+            const previous = page > 1 ? `${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/issue/?page=${page - 1}` : null;
+            return { results, count: MOCK_S13_RECORDS.length, next, previous };
+        }
+        const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/issue/?page=${page}`);
+        if (!response.ok) {
+            console.warn('S13 records API failed, returning empty page:', response.status);
+            return { results: [], count: 0, next: null, previous: null };
+        }
+        const data = await response.json();
+        if (Array.isArray(data)) return { results: data, count: data.length, next: null, previous: null };
+        return { results: data?.results || [], count: data?.count || 0, next: data?.next || null, previous: data?.previous || null };
+    },
+
+    async getS13Stats(): Promise<{ thisMonth?: number; pending?: number; departments?: number; itemsIssued?: number }>{
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            const thisMonth = MOCK_S13_RECORDS.filter(r => r.date && r.date.startsWith(new Date().getFullYear().toString())).length;
+            const pending = MOCK_S13_RECORDS.filter(r => r.status === 'Pending' || r.status === 'Submitted').length;
+            const departments = new Set(MOCK_S13_RECORDS.map(r => r.department)).size;
+            const itemsIssued = MOCK_S13_RECORDS.reduce((s, r) => s + (Number(r.items) || 0), 0);
+            return { thisMonth, pending, departments, itemsIssued };
+        }
+        const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/issue/stats/`);
+        if (!response.ok) {
+            console.warn('S13 stats API failed:', response.status);
+            return {} as any;
+        }
+        return response.json();
+    },
 
     async getS13Record(id: string): Promise<S13Record | null> {
         if (apiConfig.useMockData) {
@@ -240,8 +278,48 @@ export const inventoryService = {
             const data = await response.json();
             // Handle paginated response (DRF style) or direct array
             return data.results ? data.results : data;
-        }
-    },
+        }},
+
+        // Paginated S11 records (DRF-style)
+        async getS11RecordsPaginated(page: number = 1): Promise<{ results: S11Record[]; count: number; next: string | null; previous: string | null }> {
+            if (apiConfig.useMockData) {
+                await delay(SIMULATE_DELAY);
+                const pageSize = 10;
+                const start = (page - 1) * pageSize;
+                const results = MOCK_S11_RECORDS.slice(start, start + pageSize);
+                const next = start + pageSize < MOCK_S11_RECORDS.length ? `${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/receive/?page=${page + 1}` : null;
+                const previous = page > 1 ? `${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/receive/?page=${page - 1}` : null;
+                return { results, count: MOCK_S11_RECORDS.length, next, previous };
+            }
+            const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/receive/?page=${page}`);
+            if (!response.ok) {
+                console.warn('S11 records API failed, returning empty page:', response.status);
+                return { results: [], count: 0, next: null, previous: null };
+            }
+            const data = await response.json();
+            if (Array.isArray(data)) return { results: data, count: data.length, next: null, previous: null };
+            return { results: data?.results || [], count: data?.count || 0, next: data?.next || null, previous: data?.previous || null };
+        },
+
+        async getS11Stats(): Promise<{ thisMonth?: number; drafts?: number; pending?: number; posted?: number; totalValue?: number }>{
+            if (apiConfig.useMockData) {
+                await delay(SIMULATE_DELAY);
+                // derive simple stats from mock records
+                const thisMonth = MOCK_S11_RECORDS.filter(r => r.date && r.date.startsWith(new Date().getFullYear().toString())).length;
+                const drafts = MOCK_S11_RECORDS.filter(r => r.status === 'Draft').length;
+                const pending = MOCK_S11_RECORDS.filter(r => r.status === 'Submitted' || r.status === 'Approved').length;
+                const posted = MOCK_S11_RECORDS.filter(r => r.status === 'Posted').length;
+                const totalValue = MOCK_S11_RECORDS.reduce((s, r) => s + (Number(r.totalValue || r.amount || 0) || 0), 0);
+                return { thisMonth, drafts, pending, posted, totalValue };
+            }
+            const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/receive/stats/`);
+            if (!response.ok) {
+                // fallback to a minimal empty stats object
+                console.warn('S11 stats API failed:', response.status);
+                return {};
+            }
+            return response.json();
+        },
 
     async createS11Record(record: Omit<S11Record, "id">): Promise<S11Record> {
         if (apiConfig.useMockData) {
