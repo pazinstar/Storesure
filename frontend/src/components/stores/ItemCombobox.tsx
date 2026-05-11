@@ -23,6 +23,7 @@ export interface StoreItem {
   description: string;
   unit: string;
   assetType: AssetType;
+  unitCost?: number | string;
 }
 
 interface ItemComboboxProps {
@@ -30,6 +31,7 @@ interface ItemComboboxProps {
   value: string;
   onSelect: (item: StoreItem) => void;
   placeholder?: string;
+  onOpen?: () => void;
 }
 
 export function ItemCombobox({
@@ -37,13 +39,19 @@ export function ItemCombobox({
   value,
   onSelect,
   placeholder = "Select item...",
+  onOpen,
 }: ItemComboboxProps) {
   const [open, setOpen] = useState(false);
+
+  const handleOpenChange = (val: boolean) => {
+    setOpen(val);
+    if (val && onOpen) onOpen();
+  };
 
   const selectedItem = items.find((item) => item.code === value);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
