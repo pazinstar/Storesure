@@ -96,13 +96,14 @@ const modules = [
       { name: "Purchase Orders (LPO)", href: "/stores/lpo", icon: FileInput },
       { name: "Delivery Logging", href: "/stores/delivery", icon: Truck },
       { name: "Inspection & Acceptance", href: "/stores/inspection", icon: ClipboardCheckIcon },
-      { name: "Capitalization Settings", href: "/assets/capitalization-settings", icon: Calculator },
+      { name: "Capitalization", href: "/assets/capitalization", icon: Calculator },
       { name: "Classify Item", href: "/assets/classify", icon: ScrollText },
       { name: "Receive Stock (GRN)", href: "/stores/receive", icon: ArrowDownToLine },
       { name: "Issue Stock", href: "/stores/issue", icon: ArrowUpFromLine },
       { name: "Routine Issue Authorities", href: "/stores/ria", icon: Clock },
       { name: "SRIV", href: "/stores/sriv", icon: Receipt },
       { name: "Ledgers", href: "/stores/ledger", icon: ScrollText },
+      { name: "Queues", href: "/queues", icon: RefreshCw },
       // { name: "Stock Balances", href: "/stores/balances", icon: Scale }, // Hidden for pilot
       // { name: "Stock Adjustments", href: "/stores/adjustments", icon: RefreshCw }, // Hidden for pilot
       // { name: "Stock Transfers", href: "/stores/transfers", icon: ArrowLeftRight }, // Hidden for pilot

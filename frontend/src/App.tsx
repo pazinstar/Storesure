@@ -9,8 +9,7 @@ import { AuditModeBanner } from "@/components/AuditModeBanner";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { HeaderActions } from "@/components/HeaderActions";
-import S2RetryQueue from "@/components/S2RetryQueue";
-import CapitalizationQueue from "@/components/CapitalizationQueue";
+// queue components moved out of header into dedicated pages
 import { AuthProvider } from "@/contexts/AuthContext";
 import { NotificationProvider } from "@/contexts/NotificationContext";
 import { MessageProvider } from "@/contexts/MessageContext";
@@ -59,6 +58,8 @@ import LsoPrintPage from "./pages/stores/LsoPrintPage";
 import LSOManagement from "./pages/stores/LSOManagement";
 import DeliveryLogging from "./pages/stores/DeliveryLogging";
 import InspectionAcceptance from "./pages/stores/InspectionAcceptance";
+// Queue pages
+import Queues from './pages/queues/Queues';
 import { FileMovementProvider } from "./contexts/FileMovementContext";
 import { DeliveryProvider } from "./contexts/DeliveryContext";
 import { RecordsRetentionProvider } from "./contexts/RecordsRetentionContext";
@@ -90,6 +91,7 @@ import BulkCapitalization from "./pages/assets/BulkCapitalization";
 import BulkPrompts from "./pages/assets/BulkPrompts";
 import PromptDetail from "./pages/assets/PromptDetail";
 import CapitalizationSettings from "./pages/assets/CapitalizationSettings";
+import Capitalization from "./pages/assets/Capitalization";
 import SingleClassify from "./pages/assets/SingleClassify";
 
 // Library module pages
@@ -169,8 +171,6 @@ function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
             <UserLocationDisplay />
             <ThemeToggle />
             <HeaderActions />
-              <S2RetryQueue />
-              <CapitalizationQueue />
           </div>
         </header>
         <main className="flex-1 min-w-0 overflow-auto p-6">{children}</main>
@@ -601,6 +601,17 @@ const App = () => (
                                               </ProtectedRoute>
                                             }
                                           />
+                                          {/* Queues consolidated page */}
+                                          <Route
+                                            path="/queues"
+                                            element={
+                                              <ProtectedRoute>
+                                                <AuthenticatedLayout>
+                                                  <Queues />
+                                                </AuthenticatedLayout>
+                                              </ProtectedRoute>
+                                            }
+                                          />
 
                                           {/* Assets module routes */}
                                           <Route
@@ -664,11 +675,11 @@ const App = () => (
                                             }
                                           />
                                           <Route
-                                            path="/assets/capitalization-settings"
+                                            path="/assets/capitalization"
                                             element={
                                               <ProtectedRoute>
                                                 <AuthenticatedLayout>
-                                                  <CapitalizationSettings />
+                                                  <Capitalization />
                                                 </AuthenticatedLayout>
                                               </ProtectedRoute>
                                             }

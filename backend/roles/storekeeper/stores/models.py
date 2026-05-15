@@ -1,7 +1,10 @@
 from django.template.defaultfilters import default
 from django.db import models
+from django.db.models import Q, CheckConstraint
 from django.utils import timezone
 import uuid
+
+from common.models import AuditMixin, LockedPreventSaveMixin
 
 class ItemTypeChoices(models.TextChoices):
     CONSUMABLE = 'consumable', 'Consumable'
@@ -9,7 +12,7 @@ class ItemTypeChoices(models.TextChoices):
     PERMANENT = 'permanent', 'Permanent'
     FIXED_ASSET = 'fixed_asset', 'Fixed Asset'
 
-class InventoryItem(models.Model):
+class InventoryItem(AuditMixin, LockedPreventSaveMixin, models.Model):
     id = models.CharField(max_length=50, primary_key=True, blank=True) # ITM001
     name = models.CharField(max_length=255)
     category = models.CharField(max_length=100)
@@ -111,6 +114,101 @@ class InventoryItem(models.Model):
     def __str__(self):
         return f"{self.id} - {self.name}"
 
+    class Meta:
+        constraints = [
+            CheckConstraint(check=Q(category_type__in=[c.value for c in ItemTypeChoices]), name='stores_inventoryitem_valid_type')
+        ]
+
+
+class ItemType(models.TextChoices):
+    CONSUMABLE = 'consumable', 'Consumable'
+    EXPENDABLE = 'expendable', 'Expendable'
+    PERMANENT = 'permanent', 'Permanent'
+    FIXED_ASSET = 'fixed_asset', 'Fixed Asset'
+
+
+class Item(AuditMixin, LockedPreventSaveMixin, models.Model):
+    """New normalized Item master for strict classification and S2 preparation."""
+    id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=50, unique=True)
+    name = models.CharField(max_length=255)
+    unit = models.CharField(max_length=50, blank=True, default='')
+    type = models.CharField(max_length=20, choices=ItemType.choices, default=ItemType.CONSUMABLE)
+    category = models.CharField(max_length=100, blank=True, default='')
+    base_unit_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'stores_item'
+        constraints = [
+            CheckConstraint(check=Q(type__in=[c.value for c in ItemType]), name='stores_item_valid_type')
+        ]
+
+    def __str__(self):
+        return f"{self.code} - {self.name}"
+
+
+class CapitalizationPolicy(AuditMixin, LockedPreventSaveMixin, models.Model):
+    """System-wide capitalization settings and thresholds."""
+    id = models.BigAutoField(primary_key=True)
+    currency = models.CharField(max_length=10, default='KES')
+    capitalization_threshold = models.DecimalField(max_digits=12, decimal_places=2, default=50000)
+    bulk_materiality_threshold = models.DecimalField(max_digits=12, decimal_places=2, default=100000)
+    min_useful_life_years = models.PositiveSmallIntegerField(default=2)
+    default_residual_value_pct = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    depreciation_start_rule = models.CharField(max_length=100, default='deployed')
+    asset_classes = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'stores_capitalizationpolicy'
+
+    def __str__(self):
+        return f"Policy {self.id} - {self.currency} threshold {self.capitalization_threshold}"
+
+
+class LedgerType(models.TextChoices):
+    S1_CONSUMABLE = 's1_consumable', 'S1 - Consumable'
+    S2_PERMANENT_EXPENDABLE = 's2_permanent_expendable', 'S2 - Permanent/Expendable'
+
+
+class StoreLedger(AuditMixin, LockedPreventSaveMixin, models.Model):
+    """Represents a logical ledger (S1 or S2) for items in stock."""
+    id = models.BigAutoField(primary_key=True)
+    name = models.CharField(max_length=255)
+    ledger_type = models.CharField(max_length=50, choices=LedgerType.choices, default=LedgerType.S1_CONSUMABLE)
+    item = models.ForeignKey(Item, on_delete=models.PROTECT, related_name='ledgers', blank=True, null=True)
+    balance_qty = models.IntegerField(default=0)
+    balance_value = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'stores_storeledger'
+        constraints = [
+            CheckConstraint(check=Q(ledger_type__in=[c.value for c in LedgerType]), name='stores_storeledger_valid_type')
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.ledger_type})"
+
+
+class DepreciationMethod(models.TextChoices):
+    STRAIGHT_LINE = 'straight_line', 'Straight Line'
+    DECLINING = 'declining_balance', 'Declining Balance'
+
+
+class AssetStatus(models.TextChoices):
+    ACTIVE = 'active', 'Active'
+    DISPOSED = 'disposed', 'Disposed'
+    IN_MAINTENANCE = 'in_maintenance', 'In Maintenance'
+
+
+
+
 class Delivery(models.Model):
     id = models.CharField(max_length=50, primary_key=True) # DEL001
     deliveryId = models.CharField(max_length=100) # DLV-2024-001
@@ -188,6 +286,7 @@ class Requisition(models.Model):
     purpose = models.TextField(blank=True, null=True)
     approval_level = models.PositiveIntegerField(default=0)
     status = models.CharField(max_length=100)
+    issued_s13 = models.CharField(max_length=100, blank=True, null=True)
     receiverSignature = models.BooleanField(default=False)
     issuerSignature = models.BooleanField(default=False)
     createdAt = models.DateTimeField(auto_now_add=True)
@@ -220,6 +319,20 @@ class Requisition(models.Model):
 
     def __str__(self):
         return self.id
+
+    def can_transition_to(self, new_status: str) -> bool:
+        """Validate allowed status transitions for requisitions."""
+        TRANSITIONS = {
+            'Draft': ['Pending', 'Rejected'],
+            'Pending': ['Approved', 'Partially Approved', 'Rejected', 'Returned'],
+            'Approved': ['Issued'],
+            'Partially Approved': ['Issued', 'Returned'],
+            'Returned': ['Pending', 'Rejected'],
+            'Rejected': [],
+            'Issued': [],
+        }
+        current = self.status or 'Draft'
+        return new_status == current or new_status in TRANSITIONS.get(current, [])
 
 class RequisitionItem(models.Model):
     id = models.CharField(max_length=50, primary_key=True) # RQI001
@@ -834,7 +947,7 @@ class DisposalRecord(models.Model):
 class AssetDisposalRecord(models.Model):
     """Record a disposal event tied to a FixedAsset (full or partial)."""
     id = models.BigAutoField(primary_key=True)
-    asset = models.ForeignKey('FixedAsset', on_delete=models.CASCADE, related_name='disposals')
+    asset = models.ForeignKey('stores.FixedAsset', on_delete=models.CASCADE, related_name='disposals')
     disposed_qty = models.IntegerField(default=0)
     disposal_value = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     disposal_status = models.CharField(max_length=50, blank=True, default='')
@@ -1312,7 +1425,7 @@ DEPRECIATION_METHOD_CHOICES = [
 ]
 
 
-class FixedAsset(models.Model):
+class FixedAsset(AuditMixin, LockedPreventSaveMixin, models.Model):
     """
     Fixed Asset Register — tracks school fixed assets with full lifecycle management.
     Supports grouped assets (parent/child), status state machine, partial disposal,
@@ -1402,6 +1515,7 @@ class FixedAsset(models.Model):
     # Audit
     notes = models.TextField(blank=True, default='')
     created_by = models.CharField(max_length=255, blank=True, default='')
+    locked = models.BooleanField(default=True)
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
 
@@ -1790,6 +1904,24 @@ class BulkCreationJob(models.Model):
         return f"Job {self.id} - {self.bulk_group_ref} ({self.status})"
 
 
+class OverrideLog(models.Model):
+    """Audit log for manual override actions on capitalization prompts."""
+    id = models.BigAutoField(primary_key=True)
+    prompt = models.ForeignKey(CapitalizationPrompt, on_delete=models.CASCADE, related_name='override_logs')
+    original_recommendation = models.CharField(max_length=100, blank=True, default='')
+    final_decision = models.CharField(max_length=100, blank=True, default='')
+    reason = models.TextField(blank=True, default='')
+    override_by = models.CharField(max_length=255, blank=True, default='')
+    approved_by = models.CharField(max_length=255, blank=True, default='')
+    createdAt = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'stores_override_log'
+
+    def __str__(self):
+        return f"Override {self.id} on {self.prompt.id} by {self.override_by} -> {self.final_decision}"
+
+
 class LsoRecord(models.Model):
     """
     Local Service Order (LSO) / Local Purchase Order (LPO) records.
@@ -1802,12 +1934,66 @@ class LsoRecord(models.Model):
         choices=[('lso', 'Local Service Order'), ('lpo', 'Local Purchase Order')],
         default='lpo'
     )
+    # Core fields
     description = models.TextField(blank=True, default='')
     supplierName = models.CharField(max_length=255, blank=True, default='')
     totalValue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    status = models.CharField(max_length=50, default='draft')
+    status = models.CharField(max_length=50, default='Draft')
     # Link to originating requisition (optional)
     requisition = models.ForeignKey('Requisition', null=True, blank=True, on_delete=models.SET_NULL, related_name='lsos')
+
+    # Header / procurement refs
+    date = models.DateField(blank=True, null=True)
+    procurement_method = models.CharField(max_length=50, blank=True, null=True)
+    quotation_ref = models.CharField(max_length=100, blank=True, null=True)
+
+    # Provider information
+    provider_name = models.CharField(max_length=255, blank=True, null=True)
+    provider_kra_pin = models.CharField(max_length=100, blank=True, null=True)
+    provider_address = models.TextField(blank=True, null=True)
+    provider_phone = models.CharField(max_length=50, blank=True, null=True)
+    provider_email = models.EmailField(blank=True, null=True)
+
+    # Service details
+    service_description = models.TextField(blank=True, null=True)
+    service_location = models.CharField(max_length=255, blank=True, null=True)
+    service_start_date = models.DateField(blank=True, null=True)
+    service_completion_date = models.DateField(blank=True, null=True)
+
+    # Financial classification
+    account = models.CharField(max_length=50, blank=True, null=True)
+    vote_head = models.CharField(max_length=50, blank=True, null=True)
+    # cost_lines: list of dicts {unit, qty, unit_cost, total}
+    cost_lines = models.JSONField(default=list)
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    vat = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    # Authorization / signatures
+    prepared_by = models.CharField(max_length=255, blank=True, null=True)
+    authorized_by_bursar = models.CharField(max_length=255, blank=True, null=True)
+    principal = models.CharField(max_length=255, blank=True, null=True)
+    prepared_at = models.DateTimeField(blank=True, null=True)
+    authorized_at = models.DateTimeField(blank=True, null=True)
+
+    # Completion certification
+    completed_by = models.CharField(max_length=255, blank=True, null=True)
+    completion_verified_by_committee = models.CharField(max_length=255, blank=True, null=True)
+    completion_date = models.DateField(blank=True, null=True)
+    completion_remarks = models.TextField(blank=True, null=True)
+
+    # Provider acknowledgement
+    provider_ack_name = models.CharField(max_length=255, blank=True, null=True)
+    provider_ack_signature = models.TextField(blank=True, null=True)
+    provider_ack_date = models.DateField(blank=True, null=True)
+
+    # System footer
+    generated_by = models.CharField(max_length=255, blank=True, null=True)
+    print_date = models.DateTimeField(blank=True, null=True)
+    system_ref_id = models.CharField(max_length=100, blank=True, null=True)
+
+    # Locking / audit
+    locked = models.BooleanField(default=False)
     createdBy = models.CharField(max_length=255, blank=True, default='')
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
@@ -1819,3 +2005,32 @@ class LsoRecord(models.Model):
 
     def __str__(self):
         return f"{self.lsoNumber or self.id}"
+
+    def can_transition_to(self, new_status: str) -> bool:
+        TRANSITIONS = {
+            'Draft': ['Authorized', 'In Progress', 'Cancelled'],
+            'Authorized': ['In Progress', 'Cancelled'],
+            'In Progress': ['Completed', 'Cancelled'],
+            'Completed': ['Verified'],
+            'Verified': ['Paid'],
+            'Paid': [],
+            'Cancelled': [],
+        }
+        current = (self.status or 'Draft')
+        return new_status == current or new_status in TRANSITIONS.get(current, [])
+
+
+class ServiceVerification(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    lso = models.ForeignKey(LsoRecord, related_name='verifications', on_delete=models.CASCADE)
+    verifier = models.CharField(max_length=255)
+    verifier_role = models.CharField(max_length=255, blank=True, null=True)
+    remarks = models.TextField(blank=True, null=True)
+    evidence = models.JSONField(default=list, blank=True)  # list of attachment refs
+    createdAt = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'stores_service_verification'
+
+    def __str__(self):
+        return f"Verification {self.id} for {self.lso.lsoNumber or self.lso.id}"

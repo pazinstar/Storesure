@@ -4,7 +4,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from drf_spectacular.views import (
     SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView,
 )
-from roles.storekeeper.stores.views import DeliveriesListView
+# Deliveries view import removed to avoid importing heavy stores.views at project import time
 from roles.procurement.purchase.views import (
     PurchaseRequisitionListCreateView,
     PurchaseRequisitionDetailView,
@@ -40,7 +40,7 @@ urlpatterns = [
         path('admin/', include('roles.admin.dashboard.urls')),
 
         # ── Deliveries (global) ───────────────────────────────────────────────
-        path('deliveries/', DeliveriesListView.as_view(), name='deliveries'),
+        # The deliveries endpoint is provided under the storekeeper app routes.
 
         # ── Students ──────────────────────────────────────────────────────────
         path('students/', include('roles.students.urls')),

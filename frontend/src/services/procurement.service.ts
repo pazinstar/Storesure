@@ -733,5 +733,20 @@ export const procurementService = {
         const response = await fetch(`${apiConfig.baseUrl}/procurement/contracts/clear`, { method: "DELETE" });
         if (!response.ok) throw new Error("Failed to clear contracts");
         return true;
-    }
+    },
+    async generateSIV(requisitionId: string): Promise<{ ok: boolean; s13Id: string | null; raw: any }> {
+        if (apiConfig.useMockData) {
+            await delay(SIMULATE_DELAY);
+            return { ok: true, s13Id: `S13-2024-${String(Math.floor(Math.random() * 900) + 100)}`, raw: null };
+        }
+        const response = await fetch(`${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/requisitions/${requisitionId}/generate_siv/`, { method: 'POST' });
+        if (!response.ok) {
+            let body = {} as any;
+            try { body = await response.json(); } catch (e) { /* ignore */ }
+            const msg = body?.detail || body?.error || response.statusText;
+            throw new Error(msg);
+        }
+        const data = await response.json();
+        return { ok: data?.ok === true, s13Id: data?.s13 ?? data?.s13Id ?? null, raw: data };
+    },
 };

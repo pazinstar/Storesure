@@ -85,17 +85,47 @@ class DeliveryDecisionUpdateSerializer(serializers.ModelSerializer):
 
 class RequisitionItemSerializer(serializers.ModelSerializer):
     itemCode = serializers.PrimaryKeyRelatedField(queryset=InventoryItem.objects.all())
+    in_stock = serializers.SerializerMethodField(read_only=True)
+    available = serializers.SerializerMethodField(read_only=True)
     
     class Meta:
         model = RequisitionItem
-        fields = ['id', 'itemCode', 'description', 'unit', 'quantityRequested', 'quantityApproved', 'quantityIssued', 'unitPrice']
-        read_only_fields = ['id']
+        fields = ['id', 'itemCode', 'description', 'unit', 'quantityRequested', 'quantityApproved', 'quantityIssued', 'unitPrice', 'in_stock', 'available']
+        read_only_fields = ['id', 'in_stock', 'available']
         
     def to_representation(self, instance):
         # The frontend mock returned a string itemCode, so let's override it in representation
         ret = super().to_representation(instance)
         ret['itemCode'] = instance.itemCode.id if instance.itemCode else None
+        # populate live stock values
+        try:
+            ledger = instance.itemCode.ledgers.first()
+            in_stock = ledger.closingQty if ledger else (instance.in_stock or 0)
+            committed = ledger.committedQty if ledger and hasattr(ledger, 'committedQty') else 0
+            available = in_stock - committed
+        except Exception:
+            in_stock = instance.in_stock or 0
+            available = instance.available or 0
+        ret['in_stock'] = in_stock
+        ret['available'] = available
         return ret
+
+    def get_in_stock(self, obj):
+        try:
+            ledger = obj.itemCode.ledgers.first()
+            return ledger.closingQty if ledger else obj.in_stock
+        except Exception:
+            return obj.in_stock
+
+    def get_available(self, obj):
+        try:
+            ledger = obj.itemCode.ledgers.first()
+            if ledger:
+                committed = getattr(ledger, 'committedQty', 0)
+                return ledger.closingQty - committed
+            return obj.available
+        except Exception:
+            return obj.available
 
 
 class RequisitionSerializer(serializers.ModelSerializer):
@@ -144,6 +174,10 @@ class S12RequisitionSerializer(serializers.ModelSerializer):
             validated_data['updatedBy'] = request.user.get_full_name() or getattr(request.user, 'username', str(request.user))
 
         previous_status = instance.status
+        # Validate status transition using model helper
+        new_status = validated_data.get('status')
+        if new_status and not instance.can_transition_to(new_status):
+            raise ValidationError({'status': f"Cannot transition from '{instance.status}' to '{new_status}'."})
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
@@ -254,6 +288,10 @@ class ReceivingHistorySerializer(serializers.ModelSerializer):
             from .models import PurchaseOrder
             try:
                 po = PurchaseOrder.objects.prefetch_related('items').get(lpoNumber=lpo_ref)
+                # Enforce LPO validity window
+                from django.utils import timezone
+                if po.valid_until and po.valid_until < timezone.now().date():
+                    raise ValidationError(f"Purchase Order {po.lpoNumber} has expired (valid until {po.valid_until}). Cannot create GRN.")
                 # Sum quantities from LPO items for items count
                 items_count = sum(int(i.quantity or 0) for i in po.items.all())
                 validated_data['items'] = items_count
@@ -954,7 +992,10 @@ class OverrideDecisionSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         prompt_id = validated_data.pop('prompt_id')
-        return apply_override(prompt_id=prompt_id, **validated_data)
+        # Use OverrideManager to centralize routing and logging
+        from .override_manager import OverrideManager
+        om = OverrideManager()
+        return om.request_override(prompt_id=prompt_id, **validated_data)
 
 
 # =============================================================================
@@ -1066,6 +1107,7 @@ class FixedAssetStatusTransitionSerializer(serializers.Serializer):
     new_status = serializers.ChoiceField(
         required=True, choices=[c[0] for c in ASSET_STATUS_CHOICES],
     )
+    approved_by = serializers.CharField(required=False, allow_blank=True, default='')
     changed_by = serializers.CharField(required=False, allow_blank=True, default='')
     reason = serializers.CharField(required=False, allow_blank=True, default='')
 
@@ -1146,4 +1188,31 @@ class LsoRecordSerializer(serializers.ModelSerializer):
         if not validated_data.get('lsoNumber'):
             year = timezone.now().year
             validated_data['lsoNumber'] = f"LSO-{year}-{str(uuid.uuid4())[:8].upper()}"
+        # compute subtotal/total if cost_lines present
+        lines = validated_data.get('cost_lines') or []
+        subtotal = 0
+        for ln in lines:
+            try:
+                subtotal += float(ln.get('total', 0))
+            except Exception:
+                pass
+        validated_data['subtotal'] = validated_data.get('subtotal') or subtotal
+        validated_data['total_cost'] = validated_data.get('total_cost') or (validated_data.get('subtotal') + float(validated_data.get('vat', 0)))
         return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        # Prevent updates if LSO locked (verified/paid)
+        if getattr(instance, 'locked', False):
+            raise ValidationError('LSO record is locked and cannot be modified.')
+        # recompute totals if cost_lines updated
+        if 'cost_lines' in validated_data:
+            lines = validated_data.get('cost_lines') or []
+            subtotal = 0
+            for ln in lines:
+                try:
+                    subtotal += float(ln.get('total', 0))
+                except Exception:
+                    pass
+            validated_data['subtotal'] = validated_data.get('subtotal') or subtotal
+            validated_data['total_cost'] = validated_data.get('total_cost') or (validated_data.get('subtotal') + float(validated_data.get('vat', 0)))
+        return super().update(instance, validated_data)

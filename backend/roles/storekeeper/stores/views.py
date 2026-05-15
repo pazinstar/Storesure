@@ -656,6 +656,12 @@ class S12RequisitionDetailView(generics.RetrieveUpdateDestroyAPIView):
 
                 updated_instance.status = "Fully Issued"
                 updated_instance.save()
+                # Link S13 id back to requisition for traceability
+                try:
+                    updated_instance.issued_s13 = s13.id
+                    updated_instance.save()
+                except Exception:
+                    pass
                 
 
 class ReceivingHistoryDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -859,6 +865,94 @@ class RequisitionApprovalsListView(APIView):
         return Response({'results': data})
 
 
+class RequisitionGenerateSIVView(APIView):
+    """POST /requisitions/<id>/generate_siv/ - generate SIV (S13) for an approved requisition and perform issuance."""
+    def post(self, request, id):
+        from .models import Requisition, IssueHistory, LedgerIssue, InventoryLedger
+        from django.utils import timezone
+        from rest_framework.exceptions import ValidationError
+        try:
+            req = Requisition.objects.prefetch_related('items').get(id=id)
+        except Requisition.DoesNotExist:
+            return Response({'error': 'Requisition not found'}, status=404)
+
+        if (req.status or '').lower() not in ('approved', 'partially approved', 'partiallyapproved'):
+            return Response({'error': f'Requisition must be approved before generating SIV. Current status: {req.status}'}, status=400)
+
+        # Prevent duplicate SIV
+        existing = IssueHistory.objects.filter(requisition=req).exists()
+        if existing:
+            return Response({'error': 'SIV already generated for this requisition.'}, status=400)
+
+        with transaction.atomic():
+            s13 = IssueHistory.objects.create(
+                requisition=req,
+                date=timezone.now().date(),
+                department=req.requestingDepartment,
+                requestedBy=req.requestedBy,
+                items=req.items.count(),
+                status="Issued"
+            )
+
+            for req_item in req.items.all():
+                qty = req_item.quantityIssued if (req_item.quantityIssued and req_item.quantityIssued > 0) else (req_item.quantityApproved or 0)
+                approved = req_item.quantityApproved or 0
+                if qty > approved:
+                    raise ValidationError(f"Attempting to issue {qty} but only {approved} approved for item {req_item.itemCode.name}.")
+
+                if qty > 0 and req_item.itemCode:
+                    item_code = req_item.itemCode.id
+                    try:
+                        unit_cost = Decimal(req_item.unitPrice or 0)
+                    except Exception:
+                        unit_cost = Decimal(str(req_item.unitPrice or 0))
+                    total_cost = unit_cost * Decimal(qty)
+
+                    ledger = InventoryLedger.objects.select_for_update().filter(itemCode=item_code).first()
+                    if not ledger:
+                        ledger = InventoryLedger.objects.create(
+                            itemCode=item_code,
+                            item=req_item.itemCode,
+                            itemName=req_item.itemCode.name,
+                            unit=req_item.unit,
+                            openingQty=0, openingValue=0,
+                            totalReceiptsQty=0, totalReceiptsValue=0,
+                            totalIssuesQty=0, totalIssuesValue=0,
+                            closingQty=0, closingValue=0,
+                        )
+
+                    new_balance = ledger.closingQty - qty
+                    if new_balance < 0:
+                        raise ValidationError(f"Negative inventory balance prevented for {req_item.itemCode.name}. Available: {ledger.closingQty}, issuing: {qty}.")
+
+                    sig_str = f"Storekeeper: Yes | Recipient ({req.requestedBy}): Yes"
+                    LedgerIssue.objects.create(
+                        ledger=ledger,
+                        date=timezone.now().date(),
+                        s13No=s13.id,
+                        qty=qty,
+                        dept=req.requestingDepartment,
+                        unitCost=unit_cost,
+                        totalCost=total_cost,
+                        requisitionNo=req.s12Number,
+                        balanceInStock=new_balance,
+                        signature=sig_str
+                    )
+
+                    ledger.totalIssuesQty += qty
+                    ledger.totalIssuesValue += total_cost
+                    ledger.committedQty = max(0, ledger.committedQty - qty)
+                    ledger.closingQty = new_balance
+                    ledger.closingValue -= total_cost
+                    ledger.save()
+
+            req.status = 'Fully Issued'
+            req.issued_s13 = s13.id
+            req.save()
+
+        return Response({'ok': True, 's13': s13.id})
+
+
 class RequisitionPrintView(APIView):
     """GET /requisitions/<id>/print/ — return printable HTML of the requisition"""
     def get(self, request, id):
@@ -915,7 +1009,133 @@ class RequisitionPrintView(APIView):
                 # if PDF lib not installed, fall back to HTML with note
                 full_html = '<div style="color:#900;font-weight:600;margin-bottom:8px">PDF export not available on server. Showing HTML version.</div>' + full_html
 
-        return Response(full_html, content_type='text/html')
+        from django.http import HttpResponse
+        return HttpResponse(full_html, content_type='text/html')
+
+
+class IssuePrintHtmlView(APIView):
+    """GET /issue/<id>/print-html/ -- return server-side HTML for printing an S13 (Issue)"""
+    def get(self, request, id, format=None):
+        from .models import IssueHistory, LedgerIssue
+        try:
+            s13 = IssueHistory.objects.get(id=id)
+        except IssueHistory.DoesNotExist:
+            return Response({'detail': 'S13 record not found.'}, status=404)
+
+        # Collect ledger issue lines for this S13
+        lines = LedgerIssue.objects.filter(s13No=s13.id)
+        items_rows = "".join([
+            f"<tr><td>{idx+1}</td><td>{(li.ledger.itemName if getattr(li, 'ledger', None) and getattr(li.ledger, 'itemName', None) else (li.ledger.item.id if getattr(li, 'ledger', None) and getattr(li.ledger, 'item', None) else ''))}</td><td style='text-align:right'>{int(li.qty)}</td><td style='text-align:right'>{float(li.unitCost or 0):,.2f}</td><td style='text-align:right'>{float((li.unitCost or 0) * (li.qty or 0)):,.2f}</td></tr>"
+            for idx, li in enumerate(lines)
+        ])
+
+        html = f"""
+        <!doctype html>
+        <html>
+        <head>
+          <meta charset='utf-8'/>
+          <title>S13-{s13.id} - Print</title>
+          <style>@page {{size:A4;margin:20mm}} body{{font-family: Arial, sans-serif; color:#111}} table{{width:100%;border-collapse:collapse}} td,th{{border:1px solid #000;padding:6px}}</style>
+        </head>
+        <body>
+          <h2>Stores Issue Voucher (S13) - {s13.id}</h2>
+          <p><strong>Department:</strong> {s13.department or ''} &nbsp; <strong>Date:</strong> {getattr(s13, 'date', '')}</p>
+          <p><strong>Requested By:</strong> {s13.requestedBy or ''} &nbsp; <strong>Reference Requisition:</strong> {getattr(s13, 'requisition').s12Number if getattr(s13, 'requisition', None) else ''}</p>
+          <table>
+            <thead><tr><th>#</th><th>Description</th><th style='text-align:right'>Qty</th><th style='text-align:right'>Unit Cost</th><th style='text-align:right'>Total</th></tr></thead>
+            <tbody>
+              {items_rows}
+            </tbody>
+          </table>
+          <p style='text-align:right;font-weight:bold'>Items: {int(s13.items or 0)}</p>
+        </body>
+        </html>
+        """
+
+        return HttpResponse(html, content_type='text/html')
+
+
+class IssuePdfView(APIView):
+    """GET /issue/<id>/print-pdf/ -- render and return PDF for S13 using WeasyPrint when available"""
+    def get(self, request, id, format=None):
+        from .models import IssueHistory, LedgerIssue
+        try:
+            s13 = IssueHistory.objects.get(id=id)
+        except IssueHistory.DoesNotExist:
+            return Response({'detail': 'S13 record not found.'}, status=404)
+
+        # Build HTML similar to HTML view
+        lines = LedgerIssue.objects.filter(s13No=s13.id)
+        items_rows = "".join([
+            f"<tr><td>{idx+1}</td><td>{(li.ledger.itemName if getattr(li, 'ledger', None) and getattr(li.ledger, 'itemName', None) else (li.ledger.item.id if getattr(li, 'ledger', None) and getattr(li.ledger, 'item', None) else ''))}</td><td style='text-align:right'>{int(li.qty)}</td><td style='text-align:right'>{float(li.unitCost or 0):,.2f}</td><td style='text-align:right'>{float((li.unitCost or 0) * (li.qty or 0)):,.2f}</td></tr>"
+            for idx, li in enumerate(lines)
+        ])
+
+        html = ("<!doctype html><html><head><meta charset='utf-8'/>" 
+                "<title>S13-" + str(s13.id) + " - Print</title>" 
+                "<style>body{font-family: Arial, sans-serif;}table{width:100%;border-collapse:collapse}td,th{border:1px solid #000;padding:6px}</style>" 
+                "</head><body>"
+                "<h2>Stores Issue Voucher (S13) - " + str(s13.id) + "</h2>"
+                "<p><strong>Department:</strong> " + (s13.department or '') + " &nbsp; <strong>Date:</strong> " + str(getattr(s13, 'date', '')) + "</p>"
+                "<p><strong>Requested By:</strong> " + (s13.requestedBy or '') + " &nbsp; <strong>Reference Requisition:</strong> " + (getattr(s13, 'requisition').s12Number if getattr(s13, 'requisition', None) else '') + "</p>"
+                "<table><thead><tr><th>#</th><th>Description</th><th style='text-align:right'>Qty</th><th style='text-align:right'>Unit Cost</th><th style='text-align:right'>Total</th></tr></thead><tbody>"
+                + items_rows +
+                "</tbody></table>"
+                + "<p style='text-align:right;font-weight:bold'>Items: " + str(int(s13.items or 0)) + "</p>"
+                + "</body></html>")
+
+        try:
+            from weasyprint import HTML
+        except Exception:
+            return Response({'error': 'WeasyPrint is not available on the server. Install weasyprint and its system dependencies.'}, status=500)
+
+        pdf = HTML(string=html).write_pdf()
+        return HttpResponse(pdf, content_type='application/pdf')
+
+
+class IssueDetailJsonView(APIView):
+    """GET /issue/<id>/detail/ -- return JSON for S13 including line items (LedgerIssue rows)"""
+    def get(self, request, id, format=None):
+        from .models import IssueHistory, LedgerIssue
+        try:
+            s13 = IssueHistory.objects.get(id=id)
+        except IssueHistory.DoesNotExist:
+            return Response({'detail': 'S13 record not found.'}, status=404)
+
+        lines_qs = LedgerIssue.objects.filter(s13No=s13.id)
+        items = []
+        for li in lines_qs:
+            # Prefer readable item name from ledger.itemName or linked item
+            item_name = ''
+            try:
+                if getattr(li, 'ledger', None) and getattr(li.ledger, 'itemName', None):
+                    item_name = li.ledger.itemName
+                elif getattr(li, 'ledger', None) and getattr(li.ledger, 'item', None):
+                    item_name = str(li.ledger.item)
+            except Exception:
+                item_name = ''
+
+            items.append({
+                'id': getattr(li, 'id', None),
+                'description': item_name or getattr(li, 'description', '') or '',
+                'unit': getattr(li, 'ledger', None) and getattr(li.ledger, 'unit', '') or '',
+                'qty': int(getattr(li, 'qty', 0) or 0),
+                'unitCost': float(getattr(li, 'unitCost', 0) or 0),
+                'total': float((getattr(li, 'unitCost', 0) or 0) * (getattr(li, 'qty', 0) or 0)),
+            })
+
+        data = {
+            'id': s13.id,
+            'date': s13.date.isoformat() if getattr(s13, 'date', None) else (s13.createdAt.isoformat() if getattr(s13, 'createdAt', None) else None),
+            'department': s13.department,
+            'requestedBy': s13.requestedBy,
+            'requisitionRef': getattr(s13, 'requisition').s12Number if getattr(s13, 'requisition', None) else None,
+            'items': items,
+            'itemsCount': int(s13.items or 0),
+            'status': s13.status,
+        }
+
+        return Response(data)
 from .serializers import (
     SupplierSerializer,
     PurchaseOrderSerializer,
@@ -923,6 +1143,7 @@ from .serializers import (
     InventoryLedgerSerializer,
     StoreReportSerializer
 )
+from .services_lso import verify_lso
 
 class SupplierListView(generics.ListCreateAPIView):
     queryset = Supplier.objects.all().order_by('-createdAt')
@@ -1014,44 +1235,17 @@ class LpoPrintHtmlView(APIView):
 
 
 class LsoPrintHtmlView(APIView):
-    """GET /lsos/<id>/print-html/ -- return server-side HTML for printing LSO"""
-    def get(self, request, id, format=None):
-        try:
-            lso = LsoRecord.objects.get(id=id)
-        except LsoRecord.DoesNotExist:
-            return Response({'detail': 'LSO record not found.'}, status=404)
-
-        html = f"""
-        <!doctype html>
-        <html>
-        <head>
-          <meta charset='utf-8'/>
-          <title>{lso.lsoNumber or lso.id} - LSO Print</title>
-          <style>body{{font-family: Arial, sans-serif;}}table{{width:100%;border-collapse:collapse}}td,th{{border:1px solid #000;padding:6px}}</style>
-        </head>
-        <body>
-          <h2>Local Service Order (LSO) - {lso.lsoNumber or lso.id}</h2>
-          <p><strong>Supplier:</strong> {lso.supplierName} &nbsp; <strong>Date:</strong> {lso.createdAt.date() if lso.createdAt else ''}</p>
-          <p><strong>Description:</strong> {lso.description}</p>
-          <p style='text-align:right;font-weight:bold'>Total: KES {float(lso.totalValue):,.2f}</p>
-        </body>
-        </html>
-        """
-
-        return HttpResponse(html, content_type='text/html')
-
-
-class LpoPdfView(APIView):
-        """GET /lpos/<id>/print-pdf/ -- render and return PDF for LPO using WeasyPrint"""
+        """GET /lsos/<id>/print-html/ -- return server-side HTML for printing LSO"""
         def get(self, request, id, format=None):
                 try:
-                        po = PurchaseOrder.objects.get(id=id)
-                except PurchaseOrder.DoesNotExist:
-                        return Response({'detail': 'Purchase order not found.'}, status=404)
+                        lso = LsoRecord.objects.get(id=id)
+                except LsoRecord.DoesNotExist:
+                        return Response({'detail': 'LSO record not found.'}, status=404)
 
-                items_rows = "".join([
-                        f"<tr><td>{it.description}</td><td>{it.unit}</td><td style='text-align:right'>{int(it.quantity)}</td><td style='text-align:right'>{float(it.unitPrice):,.2f}</td><td style='text-align:right'>{float(it.quantity * float(it.unitPrice)):,.2f}</td></tr>"
-                        for it in po.items.all() if hasattr(po, 'items')
+                # Build detailed A4-ready HTML for LSO
+                cost_rows = ''.join([
+                        f"<tr><td>{idx+1}</td><td>{line.get('description','')}</td><td style='text-align:right'>{line.get('qty',0)}</td><td style='text-align:right'>{float(line.get('unit_cost',0)):,.2f}</td><td style='text-align:right'>{float(line.get('total',0)):,.2f}</td></tr>"
+                        for idx, line in enumerate(lso.cost_lines or [])
                 ])
 
                 html = f"""
@@ -1059,69 +1253,175 @@ class LpoPdfView(APIView):
                 <html>
                 <head>
                     <meta charset='utf-8'/>
-                    <title>{po.lpoNumber} - Print</title>
-                    <style>body{{font-family: Arial, sans-serif;}}table{{width:100%;border-collapse:collapse}}td,th{{border:1px solid #000;padding:6px}}</style>
+                    <title>{lso.lsoNumber or lso.id} - LSO Print</title>
+                    <style>
+                        @page {{ size: A4; margin: 20mm }}
+                        body{{font-family: Arial, Helvetica, sans-serif; color:#111; font-size:12px; margin:0}}
+                        .container{{padding:10px 20px}}
+                        header{{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}}
+                        h1{{font-size:18px;margin:0}}
+                        table{{width:100%;border-collapse:collapse;margin-top:8px}}
+                        th,td{{border:1px solid #333;padding:8px;font-size:12px}}
+                        th{{background:#f5f5f5}}
+                        .right{{text-align:right}}
+                        .no-border td{{border:none}}
+                        .sign-block{{margin-top:20px;display:flex;justify-content:space-between}}
+                        .sign-box{{width:30%;text-align:left}}
+                        @media print {{
+                            .no-print{{display:none}}
+                        }}
+                    </style>
                 </head>
                 <body>
-                    <h2>Local Purchase Order (LPO) - {po.lpoNumber}</h2>
-                    <p><strong>Supplier:</strong> {po.supplierName} &nbsp; <strong>Date:</strong> {po.date}</p>
-                    <p><strong>Account:</strong> {po.account or ''} &nbsp; <strong>Vote Head:</strong> {po.vote_head or ''} &nbsp; <strong>Procurement Method:</strong> {po.procurement_method or ''}</p>
-                    <table>
-                        <thead><tr><th>Description</th><th>Unit</th><th>Qty</th><th>Unit</th><th>Total</th></tr></thead>
-                        <tbody>
-                            {items_rows}
-                        </tbody>
-                    </table>
-                    <p style='text-align:right;font-weight:bold'>Total: KES {float(po.totalValue):,.2f}</p>
+                    <div class='container'>
+                        <header>
+                            <div>
+                                <h1>Local Service Order (LSO)</h1>
+                                <div>{lso.lsoNumber or ''}</div>
+                            </div>
+                            <div style='text-align:right'>
+                                <div><strong>Date:</strong> {lso.date.isoformat() if lso.date else (lso.createdAt.date().isoformat() if lso.createdAt else '')}</div>
+                                <div><strong>Requisition:</strong> {getattr(lso.requisition,'s12Number', '') if lso.requisition else ''}</div>
+                                <div><strong>Procurement:</strong> {lso.procurement_method or ''} / {lso.quotation_ref or ''}</div>
+                            </div>
+                        </header>
+
+                        <section>
+                            <h3>Provider Details</h3>
+                            <table class='no-border'>
+                                <tr><td><strong>Name</strong></td><td>{lso.provider_name or lso.supplierName or ''}</td></tr>
+                                <tr><td><strong>KRA PIN</strong></td><td>{lso.provider_kra_pin or ''}</td></tr>
+                                <tr><td><strong>Address</strong></td><td>{lso.provider_address or ''}</td></tr>
+                                <tr><td><strong>Phone / Email</strong></td><td>{lso.provider_phone or ''} / {lso.provider_email or ''}</td></tr>
+                            </table>
+                        </section>
+
+                        <section>
+                            <h3>Service Details</h3>
+                            <table class='no-border'>
+                                <tr><td><strong>Description</strong></td><td>{lso.service_description or lso.description or ''}</td></tr>
+                                <tr><td><strong>Location</strong></td><td>{lso.service_location or ''}</td></tr>
+                                <tr><td><strong>Start / Completion</strong></td><td>{lso.service_start_date or ''} to {lso.service_completion_date or ''}</td></tr>
+                            </table>
+                        </section>
+
+                        <section>
+                            <h3>Cost Breakdown</h3>
+                            <table>
+                                <thead><tr><th>#</th><th>Description</th><th style='text-align:right'>Qty</th><th style='text-align:right'>Unit Cost</th><th style='text-align:right'>Total</th></tr></thead>
+                                <tbody>
+                                    {cost_rows}
+                                </tbody>
+                            </table>
+                            <table style='width:40%;float:right;margin-top:8px'>
+                                <tr><td><strong>Subtotal</strong></td><td class='right'>KES {float(lso.subtotal or 0):,.2f}</td></tr>
+                                <tr><td><strong>VAT</strong></td><td class='right'>KES {float(lso.vat or 0):,.2f}</td></tr>
+                                <tr><td><strong>Total</strong></td><td class='right'>KES {float(lso.total_cost or lso.totalValue or 0):,.2f}</td></tr>
+                            </table>
+                            <div style='clear:both'></div>
+                        </section>
+
+                        <section>
+                            <h3>Terms & Conditions</h3>
+                            <ol>
+                                <li>Payment is subject to satisfactory completion and verification by the school's inspection committee.</li>
+                                <li>All work must comply with the specifications attached to the LSO.</li>
+                                <li>The provider must produce original receipts and any statutory documents (KRA PIN, invoices).</li>
+                                <li>Any defects discovered within 90 days shall be rectified at the provider's cost.</li>
+                                <li>Payments will be made based on verified completion and approved invoices.</li>
+                            </ol>
+                        </section>
+
+                        <section class='sign-block'>
+                            <div class='sign-box'>Prepared By:<br/><br/>_____________________<br/>{lso.prepared_by or ''}</div>
+                            <div class='sign-box'>Authorized (Bursar):<br/><br/>_____________________<br/>{lso.authorized_by_bursar or ''}</div>
+                            <div class='sign-box'>Principal:<br/><br/>_____________________<br/>{lso.principal or ''}</div>
+                        </section>
+
+                        <section style='margin-top:18px'>
+                            <h3>Completion Certification</h3>
+                            <p><strong>Completed By:</strong> {lso.completed_by or ''} &nbsp; <strong>Date:</strong> {lso.completion_date or ''}</p>
+                            <p><strong>Inspection Committee:</strong> {lso.completion_verified_by_committee or ''}</p>
+                            <p><strong>Remarks:</strong> {lso.completion_remarks or ''}</p>
+                        </section>
+
+                        <footer style='margin-top:20px;font-size:11px;color:#666'>
+                            <div>Provider acknowledgement: {lso.provider_ack_name or ''} &nbsp; {lso.provider_ack_signature or ''} &nbsp; {lso.provider_ack_date or ''}</div>
+                            <div>Generated by: {lso.generated_by or ''} on {lso.print_date or ''} &nbsp; System Ref: {lso.system_ref_id or ''}</div>
+                        </footer>
+                    </div>
                 </body>
                 </html>
+
                 """
 
-                try:
-                        from weasyprint import HTML
-                except Exception:
-                        return Response({'error': 'WeasyPrint is not available on the server. Install weasyprint and its system dependencies.'}, status=500)
+                return HttpResponse(html, content_type='text/html')
 
-                pdf = HTML(string=html).write_pdf()
-                return HttpResponse(pdf, content_type='application/pdf')
+
+class LpoPdfView(APIView):
+    # GET /lpos/<id>/print-pdf/ -- render and return PDF for LPO using WeasyPrint
+    def get(self, request, id, format=None):
+        try:
+            po = PurchaseOrder.objects.get(id=id)
+        except PurchaseOrder.DoesNotExist:
+            return Response({'detail': 'Purchase order not found.'}, status=404)
+
+        items_rows = "".join([
+            f"<tr><td>{it.description}</td><td>{it.unit}</td><td style='text-align:right'>{int(it.quantity)}</td><td style='text-align:right'>{float(it.unitPrice):,.2f}</td><td style='text-align:right'>{float(it.quantity * float(it.unitPrice)):,.2f}</td></tr>"
+            for it in po.items.all() if hasattr(po, 'items')
+        ])
+
+        html = ("<!doctype html><html><head><meta charset='utf-8'/>" 
+                "<title>" + str(po.lpoNumber) + " - Print</title>" 
+                "<style>body{font-family: Arial, sans-serif;}table{width:100%;border-collapse:collapse}td,th{border:1px solid #000;padding:6px}</style>" 
+                "</head><body>"
+                "<h2>Local Purchase Order (LPO) - " + str(po.lpoNumber) + "</h2>"
+                "<p><strong>Supplier:</strong> " + (po.supplierName or '') + " &nbsp; <strong>Date:</strong> " + str(po.date) + "</p>"
+                "<p><strong>Account:</strong> " + (po.account or '') + " &nbsp; <strong>Vote Head:</strong> " + (po.vote_head or '') + " &nbsp; <strong>Procurement Method:</strong> " + (po.procurement_method or '') + "</p>"
+                "<table><thead><tr><th>Description</th><th>Unit</th><th>Qty</th><th>Unit</th><th>Total</th></tr></thead><tbody>"
+                + items_rows +
+                "</tbody></table>"
+                + "<p style='text-align:right;font-weight:bold'>Total: KES " + f"{float(po.totalValue):,.2f}" + "</p>"
+                + "</body></html>")
+
+        try:
+            from weasyprint import HTML
+        except Exception:
+            return Response({'error': 'WeasyPrint is not available on the server. Install weasyprint and its system dependencies.'}, status=500)
+
+        pdf = HTML(string=html).write_pdf()
+        return HttpResponse(pdf, content_type='application/pdf')
 
 
 class LsoPdfView(APIView):
-        """GET /lsos/<id>/print-pdf/ -- render and return PDF for LSO using WeasyPrint"""
-        def get(self, request, id, format=None):
-                try:
-                        lso = LsoRecord.objects.get(id=id)
-                except LsoRecord.DoesNotExist:
-                        return Response({'detail': 'LSO record not found.'}, status=404)
+    # GET /lsos/<id>/print-pdf/ -- render and return PDF for LSO using WeasyPrint
+    def get(self, request, id, format=None):
+        try:
+            lso = LsoRecord.objects.get(id=id)
+        except LsoRecord.DoesNotExist:
+            return Response({'detail': 'LSO record not found.'}, status=404)
 
-                html = f"""
-                <!doctype html>
-                <html>
-                <head>
-                    <meta charset='utf-8'/>
-                    <title>{lso.lsoNumber or lso.id} - LSO Print</title>
-                    <style>body{{font-family: Arial, sans-serif;}}table{{width:100%;border-collapse:collapse}}td,th{{border:1px solid #000;padding:6px}}</style>
-                </head>
-                <body>
-                    <h2>Local Service Order (LSO) - {lso.lsoNumber or lso.id}</h2>
-                    <p><strong>Supplier:</strong> {lso.supplierName} &nbsp; <strong>Date:</strong> {lso.createdAt.date() if lso.createdAt else ''}</p>
-                    <p><strong>Description:</strong> {lso.description}</p>
-                    <p style='text-align:right;font-weight:bold'>Total: KES {float(lso.totalValue):,.2f}</p>
-                </body>
-                </html>
-                """
+        html = ("<!doctype html><html><head><meta charset='utf-8'/>" 
+                "<title>" + str(lso.lsoNumber or lso.id) + " - LSO Print</title>" 
+                "<style>body{font-family: Arial, sans-serif;}table{width:100%;border-collapse:collapse}td,th{border:1px solid #000;padding:6px}</style>" 
+                "</head><body>" 
+                "<h2>Local Service Order (LSO) - " + str(lso.lsoNumber or lso.id) + "</h2>" 
+                "<p><strong>Supplier:</strong> " + (lso.supplierName or '') + " &nbsp; <strong>Date:</strong> " + (lso.createdAt.date().isoformat() if lso.createdAt else '') + "</p>" 
+                "<p><strong>Description:</strong> " + (lso.description or '') + "</p>" 
+                "<p style='text-align:right;font-weight:bold'>Total: KES " + f"{float(lso.totalValue):,.2f}" + "</p>" 
+                "</body></html>")
 
-                try:
-                        from weasyprint import HTML
-                except Exception:
-                        return Response({'error': 'WeasyPrint is not available on the server. Install weasyprint and its system dependencies.'}, status=500)
+        try:
+            from weasyprint import HTML
+        except Exception:
+            return Response({'error': 'WeasyPrint is not available on the server. Install weasyprint and its system dependencies.'}, status=500)
 
-                pdf = HTML(string=html).write_pdf()
-                return HttpResponse(pdf, content_type='application/pdf')
+        pdf = HTML(string=html).write_pdf()
+        return HttpResponse(pdf, content_type='application/pdf')
 
 
 class LsoDetailJsonView(APIView):
-    """GET /lsos/<id>/ -- return JSON for LSO record (used by frontend print page)"""
+    # GET /lsos/<id>/ -- return JSON for LSO record (used by frontend print page)
     def get(self, request, id, format=None):
         try:
             lso = LsoRecord.objects.get(id=id)
@@ -1165,6 +1465,24 @@ class LsoListCreateView(generics.ListCreateAPIView):
             serializer.save(createdBy=name)
         else:
             serializer.save()
+
+
+class LsoVerifyView(APIView):
+    """POST /lsos/<id>/verify/ - verify completion and lock LSO for payment"""
+    def post(self, request, id):
+        from rest_framework import status
+        data = request.data or {}
+        verifier = data.get('verifier') or (request.user.get_full_name() if getattr(request, 'user', None) else 'system')
+        verifier_role = data.get('verifier_role')
+        remarks = data.get('remarks')
+        attachment_ids = data.get('attachment_ids')
+
+        try:
+            ver = verify_lso(id, verifier=verifier, verifier_role=verifier_role, remarks=remarks, attachment_ids=attachment_ids, request=request)
+        except Exception as e:
+            return Response({'error': str(e)}, status=400)
+
+        return Response({'ok': True, 'verification_id': ver.id}, status=200)
 
 
 class LpoSendView(APIView):
@@ -1300,7 +1618,7 @@ class StoreReportExportView(generics.GenericAPIView):
 
 
 class IPSASReportListView(APIView):
-    """GET /reports/ipsas/ — list available IPSAS report stubs"""
+    """GET /reports/ipsas/ - list available IPSAS report stubs"""
     def get(self, request, *args, **kwargs):
         reports = [
             {'id': 'fixed_assets_register', 'title': 'Fixed Assets Register'},
@@ -1311,7 +1629,7 @@ class IPSASReportListView(APIView):
 
 
 class IPSASReportExportView(generics.GenericAPIView):
-    """GET /reports/ipsas/<id>/export/ — export IPSAS report as CSV or PDF"""
+    """GET /reports/ipsas/<id>/export/ - export IPSAS report as CSV or PDF"""
     def get(self, request, *args, **kwargs):
         report_id = kwargs.get('id')
         fmt = request.query_params.get('format', 'csv').lower()
@@ -2270,6 +2588,16 @@ class FixedAssetStatusTransitionView(APIView):
             reason = serializer.validated_data.get('reason', '')
 
             old_status = asset.status
+            # Enforce allowed status transitions
+            from .models import ASSET_STATUS_TRANSITIONS
+            allowed = ASSET_STATUS_TRANSITIONS.get(old_status, [])
+            if new_status not in allowed and old_status != new_status:
+                return Response({'detail': f"Invalid status transition from '{old_status}' to '{new_status}'."}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Require approval metadata for destructive transitions
+            if new_status == 'disposed' and not serializer.validated_data.get('approved_by'):
+                return Response({'detail': 'Disposal transitions require `approved_by` in the payload.'}, status=status.HTTP_400_BAD_REQUEST)
+
             asset.status = new_status
             # If transitioning to deployed, set depreciation_start_date according to capitalization settings
             if new_status == 'deployed' and not asset.depreciation_start_date:
@@ -2307,7 +2635,54 @@ class FixedAssetStatusTransitionView(APIView):
                     # do not block status transition on settings lookup failures
                     pass
 
-            asset.save()
+            # If record is locked we must perform a direct DB update to allow controlled state transitions
+            try:
+                from django.utils import timezone as _tz
+                if getattr(asset, 'locked', False):
+                    update_vals = {'status': asset.status, 'updatedAt': _tz.now()}
+                    if getattr(asset, 'depreciation_start_date', None):
+                        update_vals['depreciation_start_date'] = asset.depreciation_start_date
+                    from .models import FixedAsset as _FA
+                    _FA.objects.filter(pk=asset.pk).update(**update_vals)
+                else:
+                    asset.save()
+            except Exception:
+                # Fallback to normal save; let exception bubble if it fails
+                asset.save()
+
+            # Create initial DepreciationSchedule record for the asset if the model exists
+            try:
+                from django.apps import apps
+                DepreciationSchedule = apps.get_model('stores', 'DepreciationSchedule')
+            except LookupError:
+                DepreciationSchedule = None
+
+            if new_status == 'deployed' and DepreciationSchedule is not None and asset.depreciation_start_date:
+                try:
+                    from .depreciation import _calc_monthly_depr, _quantize
+                    year = asset.depreciation_start_date.year
+                    month = asset.depreciation_start_date.month
+                    monthly = _calc_monthly_depr(asset)
+                    monthly_q = _quantize(monthly)
+                    DepreciationSchedule.objects.get_or_create(
+                        asset=asset,
+                        year=year,
+                        month=month,
+                        defaults={
+                            'annual_depreciation': _quantize(monthly * 12),
+                            'monthly_depreciation': monthly_q,
+                            'accumulated_depr_before': asset.accumulated_depreciation or 0,
+                            'accumulated_depr_after': _quantize((asset.accumulated_depreciation or 0) + monthly_q),
+                            'nbv_before': asset.nbv or asset.total_cost or 0,
+                            'nbv_after': _quantize((asset.nbv or asset.total_cost or 0) - monthly_q),
+                            'is_mid_year_acquisition': False,
+                            'partial_qty_ratio': 1.0,
+                        }
+                    )
+                except Exception:
+                    # non-fatal: scheduling failure should not block transition
+                    import logging
+                    logging.getLogger('storesure.depr').exception('Failed to create initial DepreciationSchedule for asset %s', asset.id)
 
             # Log status change
             AssetStatusHistory.objects.create(

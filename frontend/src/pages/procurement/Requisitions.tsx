@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { procurementService } from "@/services/procurement.service";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/services/api";
+import { api, apiConfig } from "@/services/api";
 import { PurchaseRequisition, PurchaseRequisitionStatus } from "@/mock/data";
 import { attachmentsService } from "@/services/attachments.service";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -72,6 +72,8 @@ import { toast } from "sonner";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
+import S13PrintTemplate, { S13PrintData } from "@/components/prints/S13PrintTemplate";
+import PrintDialog from "@/components/prints/PrintDialog";
 
 const workflowSteps = [
   { status: "draft", label: "Draft", icon: Edit, description: "Requisition created" },
@@ -282,6 +284,10 @@ const Requisitions = () => {
   const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
 
+  // S13 preview state after generating SIV
+  const [s13PreviewOpen, setS13PreviewOpen] = useState(false);
+  const [s13PrintData, setS13PrintData] = useState<S13PrintData | null>(null);
+
   const handleUploadAttachment = async (req: PurchaseRequisition) => {
     if (!attachmentFile) return toast.error("Please select a file to upload");
     setUploadingAttachment(true);
@@ -358,6 +364,91 @@ const Requisitions = () => {
       },
       onError: () => toast.error("Failed to process requisition")
     });
+  };
+
+  const handleGenerateSIV = async (req: PurchaseRequisition) => {
+    try {
+      toast.loading('Generating SIV...', { id: 'gen-siv' });
+      const res = await procurementService.generateSIV(req.id);
+      toast.success(`SIV generated: ${res?.s13Id || 'generated'}`, { id: 'gen-siv' });
+      addLog('SIV Generated', 'Stores', `${req.id} -> ${res?.s13Id || ''}`);
+      queryClient.invalidateQueries({ queryKey: ['purchase-requisitions'] });
+
+      // If backend returned an S13 id, open server-side HTML print view in a new tab,
+      // attempt to download PDF, and fetch detailed JSON for inline preview.
+      if (res?.s13Id) {
+        const s13Id = res.s13Id;
+        try {
+          const printHtmlUrl = `${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/issue/${s13Id}/print-html/`;
+          // open HTML view in new tab
+          try { window.open(printHtmlUrl, '_blank'); } catch (e) { console.warn('Popup blocked or failed to open print tab', e); }
+
+          // Attempt background PDF download
+          (async () => {
+            try {
+              const pdfUrl = `${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/issue/${s13Id}/print-pdf/`;
+              const pdfResp = await fetch(pdfUrl);
+              if (pdfResp.ok) {
+                const blob = await pdfResp.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `s13-${s13Id}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+              } else {
+                console.warn('S13 PDF endpoint returned non-ok status', pdfResp.status);
+              }
+            } catch (e) {
+              console.warn('Failed to download S13 PDF', e);
+            }
+          })();
+
+          // Fetch detailed JSON with line items for inline preview
+          try {
+            const detailUrl = `${apiConfig.baseUrl}${apiConfig.storekeeperRoute}/issue/${s13Id}/detail/`;
+            const resp = await fetch(detailUrl);
+            if (resp.ok) {
+              const s13 = await resp.json();
+              const printItems = (s13.items || []).map((it: any, idx: number) => ({
+                description: it.description || `Item ${idx + 1}`,
+                unit: it.unit || '-',
+                requestedQty: it.requestedQty || 0,
+                issuedQty: it.qty || it.issuedQty || 0,
+                unitPrice: it.unitCost || it.unit_price || 0,
+              }));
+
+              const data: S13PrintData = {
+                id: s13.id,
+                date: s13.date || new Date().toISOString().split('T')[0],
+                department: s13.department || '',
+                requestedBy: s13.requestedBy || '',
+                requisitionRef: s13.requisitionRef || req.id,
+                purpose: s13.purpose || req.title || '',
+                items: printItems.length ? printItems : [{ description: '—', unit: '-', requestedQty: 0, issuedQty: 0, unitPrice: 0 }],
+                issuedBy: user?.name || 'Storekeeper',
+                issuedBySignature: undefined,
+                issuedAt: undefined,
+                status: s13.status || 'Issued',
+              };
+
+              setS13PrintData(data);
+              setS13PreviewOpen(true);
+            } else {
+              console.warn('Failed to load S13 detail JSON', resp.status);
+            }
+          } catch (err) {
+            console.warn('Failed to fetch S13 detail', err);
+          }
+        } catch (err) {
+          console.warn('Error handling generated S13', err);
+        }
+      }
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to generate SIV');
+    }
   };
 
   const openDetail = (req: PurchaseRequisition) => {
@@ -878,10 +969,16 @@ const Requisitions = () => {
                   )}
 
                   {selectedRequisition.status === "approved" && canProcess && (
-                    <Button className="flex-1" onClick={() => handleProcess(selectedRequisition)}>
-                      <Package className="h-4 w-4 mr-2" />
-                      Mark as Processed
-                    </Button>
+                    <>
+                      <Button className="flex-1" onClick={() => handleProcess(selectedRequisition)}>
+                        <Package className="h-4 w-4 mr-2" />
+                        Mark as Processed
+                      </Button>
+                      <Button className="flex-1" variant="outline" onClick={() => handleGenerateSIV(selectedRequisition)}>
+                        <Send className="h-4 w-4 mr-2" />
+                        Generate SIV & Issue
+                      </Button>
+                    </>
                   )}
 
                   {selectedRequisition.status === "processed" && (
@@ -932,6 +1029,9 @@ const Requisitions = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <PrintDialog open={s13PreviewOpen} onOpenChange={setS13PreviewOpen} title={s13PrintData ? `S13: ${s13PrintData.id}` : 'S13 Preview'}>
+        {s13PrintData && <S13PrintTemplate data={s13PrintData} />}
+      </PrintDialog>
     </div>
   );
 };

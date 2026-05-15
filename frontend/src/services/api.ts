@@ -4,6 +4,10 @@ import { procurementService } from "./procurement.service";
 import { assetsService } from "./assets.service";
 import { recordsService } from "./records.service";
 import { reportsService } from "./reports.service";
+import lsoService from "./lso.service";
+import lpoService from "./lpo.service";
+import s2Service from "./s2.service";
+import capitalizationService from "./capitalization.service";
 import { libraryService } from "./library.service";
 import { studentsService } from "./students.service";
 import { staffService } from "./staff.service";
@@ -32,8 +36,12 @@ export const api = {
     createQuotation: (data: Parameters<typeof procurementService.createQuotation>[0]) => procurementService.createQuotation(data),
     ...procurementService,
     ...assetsService,
+    ...s2Service,
     ...recordsService,
     ...reportsService,
+    ...lsoService,
+    ...lpoService,
+    ...capitalizationService,
     ...libraryService,
     ...studentsService,
     ...staffService,

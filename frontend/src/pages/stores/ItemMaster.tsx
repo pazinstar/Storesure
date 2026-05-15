@@ -68,6 +68,7 @@ interface Item {
 import { api } from "@/services/api";
 import { TablePagination } from "@/components/ui/table-pagination";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { OverrideReasonModal } from '@/components/shared'
 
 export default function ItemMaster() {
   const { isReadOnly, blockAction } = useReadOnlyGuard();
@@ -128,6 +129,10 @@ export default function ItemMaster() {
     locationType: "",
     location: "",
   });
+
+  // Override modal for manual classification overrides
+  const [overrideModalOpen, setOverrideModalOpen] = useState(false);
+  const [pendingClassification, setPendingClassification] = useState<ClassificationValue | ''>('');
 
   const getLocationOptions = (locationType: string): string[] => {
     switch (locationType) {
@@ -586,7 +591,16 @@ export default function ItemMaster() {
                 <Label htmlFor="classification">Classification *</Label>
                 <Select
                   value={formData.categoryType || 'none'}
-                  onValueChange={(value) => setFormData({ ...formData, categoryType: value === 'none' ? '' : value as ClassificationValue })}
+                  onValueChange={(value) => {
+                    const newVal = value === 'none' ? '' : value as ClassificationValue;
+                    // If user is changing an existing classification (manual override), require reason
+                    if (formData.categoryType && formData.categoryType !== newVal) {
+                      setPendingClassification(newVal);
+                      setOverrideModalOpen(true);
+                      return;
+                    }
+                    setFormData({ ...formData, categoryType: newVal });
+                  }}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select classification" />
@@ -746,6 +760,20 @@ export default function ItemMaster() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <OverrideReasonModal open={overrideModalOpen} onClose={() => { setOverrideModalOpen(false); setPendingClassification(''); }} onSubmit={async (payload) => {
+        try {
+          // call backend override endpoint to record reason (best-effort)
+          await api.overrideDecision({ reason: payload.reason, itemId: selectedItem?.id || null, classification: pendingClassification });
+        } catch (e) {
+          // ignore errors but notify
+          toast.error('Failed to record override reason');
+        }
+        // apply classification change after reason captured
+        setFormData({ ...formData, categoryType: pendingClassification });
+        setOverrideModalOpen(false);
+        setPendingClassification('');
+      }} />
 
       {/* View Item Dialog */}
       <Dialog open={isViewOpen} onOpenChange={setIsViewOpen}>

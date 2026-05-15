@@ -30,7 +30,16 @@ export async function fetchRequisition(requisitionId: string) {
   return handleResponse(res);
 }
 
+export async function generateSIV(requisitionId: string) {
+  const url = `${API_PREFIX}/requisitions/${requisitionId}/generate_siv/`;
+  const res = await fetch(url, { method: 'POST' });
+  const data = await handleResponse(res);
+  // backend returns { ok: True, s13: <id> } — normalize to s13Id for client convenience
+  return { ok: data?.ok === true, s13Id: data?.s13 ?? data?.s13Id ?? null, raw: data };
+}
+
 export default {
   approveRequisition,
   fetchRequisition,
+  generateSIV,
 }
