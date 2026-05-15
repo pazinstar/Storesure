@@ -160,3 +160,49 @@ If you'd like, I can add a short example snippet to this doc showing how to call
 
 These changes aim to standardize table UI across the app and enable server-side pagination without altering the server API contract.
 
+## Recent backend & workflow changes (2026-05-15)
+
+- Requisition → SIV (S13) end-to-end flow:
+  - Backend: new view to generate S13 from a Requisition, returns an S13 record and audit links (HTML/PDF/JSON). Print HTML endpoints now return raw HTML via `HttpResponse` (avoids DRF JSON encoding) and an optional PDF endpoint is available when WeasyPrint is installed.
+  - Serializer fix: `RequisitionItemSerializer` had runtime errors because `SerializerMethodField`-backed properties were not included in `Meta.fields` — these fields (`in_stock`, `available`) were added to resolve DRF assertion errors.
+  - Frontend: `generateSIV(requisitionId)` service was added to `frontend/src/services/procurement.service.ts` and a convenience wrapper in `frontend/src/services/requisitions.service.ts`. The Requisitions UI calls this service, then opens an inline print preview and optionally downloads a PDF.
+
+- Combined Queues & Capitalization UX:
+  - Navigation: a single `Queues` sidebar entry replaces separate links; the page contains two accessible tabs (S2 / Capitalization) instead of separate pages.
+  - UX: the queues are shown inline in tab panels (no modal/dialog). Tab components are implemented to be accessible and styled to match the app theme. Where possible we use the project's design system; `@radix-ui/react-tabs` is recommended for accessibility.
+  - Capitalization tab: previously displayed raw JSON — this has been replaced with a structured, card/list UI that shows human-friendly fields, status badges, and action buttons (approve, classify, view details) instead of technical dumps.
+
+## Developer notes & next steps
+
+- Local verification commands (frontend):
+
+```bash
+cd frontend
+npm install        # if you add new UI packages (e.g. @radix-ui/react-tabs)
+npm run dev        # start Vite dev server
+npm run build      # run production build (CI will also run this)
+```
+
+- Backend (Django):
+
+```powershell
+cd backend
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python manage.py migrate
+python manage.py runserver
+```
+
+- Documentation tasks completed in this update:
+  - Summarized the S13 / Requisition → SIV changes and serializer fix.
+  - Documented the single `Queues` navigation, inline tabs behavior, and Capitalization UI improvements.
+  - Added quick verification commands for frontend and backend.
+
+- Suggested follow-ups (not implemented in code):
+  - Permission gating for the `Capitalization` sidebar link (check `user.permissions` before rendering).
+  - Add example snippets showing how to use the new `generateSIV` service and the `ReusableTable` together in a page component.
+  - Add a `.env.example` in `backend/` with the minimal env vars required for local dev (already documented steps assume `SECRET_KEY` and `DEBUG`).
+
+If you'd like, I can: add a short troubleshooting section for common local errors, add a `.env.example`, or insert a small code snippet showing `generateSIV` usage in `frontend/src/pages/procurement/Requisitions.tsx`.
+
