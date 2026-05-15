@@ -92,7 +92,7 @@ import BulkPrompts from "./pages/assets/BulkPrompts";
 import PromptDetail from "./pages/assets/PromptDetail";
 import CapitalizationSettings from "./pages/assets/CapitalizationSettings";
 import Capitalization from "./pages/assets/Capitalization";
-import SingleClassify from "./pages/assets/SingleClassify";
+
 
 // Library module pages
 import LibraryDashboard from "./pages/library/LibraryDashboard";
@@ -704,16 +704,7 @@ const App = () => (
                                               </ProtectedRoute>
                                             }
                                           />
-                                          <Route
-                                            path="/assets/classify"
-                                            element={
-                                              <ProtectedRoute>
-                                                <AuthenticatedLayout>
-                                                  <SingleClassify />
-                                                </AuthenticatedLayout>
-                                              </ProtectedRoute>
-                                            }
-                                          />
+                                          
                                           <Route
                                             path="/assets/reports"
                                             element={

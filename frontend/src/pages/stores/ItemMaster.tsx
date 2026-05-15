@@ -36,6 +36,9 @@ import {
 import { Search, Plus, Filter, Download, Edit, Eye, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { useReadOnlyGuard } from "@/hooks/useReadOnlyGuard";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import SingleClassify from '@/pages/assets/SingleClassify';
+import BulkCapitalization from '@/pages/assets/BulkCapitalization';
 
 // Asset classification types (backend values)
 type ClassificationValue = 'consumable' | 'expendable' | 'permanent' | 'fixed_asset';
@@ -427,34 +430,49 @@ export default function ItemMaster() {
     return new Date(dateString).toLocaleDateString();
   };
 
+  const [activeTab, setActiveTab] = useState<'items' | 'classification'>('items');
+
   return (
-    <div className="flex-1 space-y-6 p-8">
-      <div className="flex items-center justify-between">
+    <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'items' | 'classification')}>
+      <div className="flex items-center justify-between p-8">
         <div>
           <h1 className="text-3xl font-bold text-foreground">Item Master</h1>
-          <p className="text-muted-foreground mt-1">
-            Manage all inventory items and their details
-          </p>
+          <p className="text-muted-foreground mt-1">Manage all inventory items and their details</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" className="gap-2" onClick={handleExport}>
-            <Download className="h-4 w-4" />
-            Export
-          </Button>
-          <Button
-            className="gap-2"
-            onClick={() => {
-              if (blockAction("add items")) return;
-              resetForm();
-              setIsAddOpen(true);
-            }}
-            disabled={isReadOnly}
-          >
-            <Plus className="h-4 w-4" />
-            Add Item
-          </Button>
-        </div>
+        {/* Show actions only on Items tab */}
+        {activeTab === 'items' && (
+          <div className="flex gap-2">
+            <Button variant="outline" className="gap-2" onClick={handleExport}>
+              <Download className="h-4 w-4" />
+              Export
+            </Button>
+            <Button
+              className="gap-2"
+              onClick={() => {
+                if (blockAction("add items")) return;
+                resetForm();
+                setIsAddOpen(true);
+              }}
+              disabled={isReadOnly}
+            >
+              <Plus className="h-4 w-4" />
+              Add Item
+            </Button>
+          </div>
+        )}
       </div>
+
+      {/* Polished tabs container */}
+      <div className="mx-8 -mt-4">
+        <TabsList className="bg-card/60 p-1 rounded-lg shadow-sm">
+          <TabsTrigger value="items" className="px-4 py-2">Items</TabsTrigger>
+          <TabsTrigger value="classification" className="px-4 py-2">Classification</TabsTrigger>
+        </TabsList>
+      </div>
+
+      <TabsContent value="items">
+        <div className="flex-1 space-y-6 p-8">
+      
 
       <Card>
         <CardHeader>
@@ -1113,6 +1131,15 @@ export default function ItemMaster() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+        </div>
+      </TabsContent>
+
+      <TabsContent value="classification">
+        <div className="p-8 space-y-6">
+          <SingleClassify />
+          <BulkCapitalization />
+        </div>
+      </TabsContent>
+    </Tabs>
   );
 }

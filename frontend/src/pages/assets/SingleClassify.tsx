@@ -119,7 +119,19 @@ export default function SingleClassify() {
               {error && <div className="text-destructive mb-2">{error}</div>}
               {!result && !error && <div className="text-muted-foreground">No result yet. Run classification to see output.</div>}
               {result && (
-                <ResultView result={result} onCopy={() => { navigator.clipboard?.writeText(JSON.stringify(result)); toast.success('Copied to clipboard'); }} />
+                <ResultView result={result} onCopy={() => {
+                  // Create a friendly summary instead of raw JSON
+                  const classification = result?.classification || result?.data || result;
+                  const lines: string[] = [];
+                  lines.push(`Status: ${result?.status || classification?.status || '-'} `);
+                  lines.push(`Suggested Action: ${classification?.suggested_action || classification?.action || '-'} `);
+                  lines.push(`Asset Class: ${classification?.category || classification?.asset_class || '-'} `);
+                  lines.push(`Capitalizable: ${classification?.capitalizable == null ? '-' : classification?.capitalizable ? 'Yes' : 'No'}`);
+                  lines.push(`Useful Life (months): ${classification?.useful_life || classification?.estimated_useful_life || '-'} `);
+                  lines.push(`Confidence: ${classification?.confidence != null ? `${(classification.confidence * 100).toFixed(0)}%` : '-'}`);
+                  navigator.clipboard?.writeText(lines.join('\n'));
+                  toast.success('Summary copied to clipboard');
+                }} />
               )}
             </div>
           </div>
@@ -150,8 +162,6 @@ function FieldRow({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 function ResultView({ result, onCopy }: { result: any; onCopy?: () => void }) {
-  const [showJson, setShowJson] = useState(false);
-
   const classification = result?.classification || result?.data || result;
   const status = result?.status || result?.classification?.status || null;
   const suggested = classification?.suggested_action || classification?.action || classification?.recommendation || null;
@@ -169,9 +179,6 @@ function ResultView({ result, onCopy }: { result: any; onCopy?: () => void }) {
           <Button variant="ghost" size="sm" onClick={() => { onCopy?.(); }}>
             <Clipboard className="h-4 w-4" />
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setShowJson((s) => !s)}>
-            {showJson ? 'Hide JSON' : 'Show JSON'}
-          </Button>
         </div>
       </div>
 
@@ -185,9 +192,7 @@ function ResultView({ result, onCopy }: { result: any; onCopy?: () => void }) {
         <FieldRow label="Confidence" value={confidence != null ? `${(confidence * 100).toFixed(0)}%` : '—'} />
       </div>
 
-      {showJson && (
-        <pre className="overflow-auto text-sm font-mono p-2 bg-muted/5 rounded">{JSON.stringify(result, null, 2)}</pre>
-      )}
+      {/* Raw JSON removed to present friendly fields by default */}
     </div>
   );
 }

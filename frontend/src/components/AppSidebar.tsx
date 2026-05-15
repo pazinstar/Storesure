@@ -97,7 +97,6 @@ const modules = [
       { name: "Delivery Logging", href: "/stores/delivery", icon: Truck },
       { name: "Inspection & Acceptance", href: "/stores/inspection", icon: ClipboardCheckIcon },
       { name: "Capitalization", href: "/assets/capitalization", icon: Calculator },
-      { name: "Classify Item", href: "/assets/classify", icon: ScrollText },
       { name: "Receive Stock (GRN)", href: "/stores/receive", icon: ArrowDownToLine },
       { name: "Issue Stock", href: "/stores/issue", icon: ArrowUpFromLine },
       { name: "Routine Issue Authorities", href: "/stores/ria", icon: Clock },

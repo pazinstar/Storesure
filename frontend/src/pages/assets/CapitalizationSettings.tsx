@@ -7,7 +7,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
-import { Save, X } from 'lucide-react';
+import { Save, X, Plus } from 'lucide-react';
 
 export default function CapitalizationSettings() {
   const [settings, setSettings] = useState<any>(null);
@@ -15,6 +15,7 @@ export default function CapitalizationSettings() {
   const [saving, setSaving] = useState(false);
   const [assetClassesText, setAssetClassesText] = useState('');
   const [jsonError, setJsonError] = useState<string | null>(null);
+  const [assetClasses, setAssetClasses] = useState<{ code: string; name: string }[]>([]);
 
   useEffect(() => {
     (async () => {
@@ -22,6 +23,7 @@ export default function CapitalizationSettings() {
         const s = await assetsService.getCapitalizationSettings();
         setSettings(s);
         setAssetClassesText(JSON.stringify(s?.asset_classes || [], null, 2));
+        setAssetClasses((s?.asset_classes || []).map((c: any) => ({ code: c.code || '', name: c.name || '' })));
       } catch (e: any) {
         setError(e.message || 'Failed to load settings');
       }
@@ -44,21 +46,27 @@ export default function CapitalizationSettings() {
 
   const save = async () => {
     setError(null);
-    if (jsonError) {
-      setError('Please fix asset classes JSON before saving');
-      return;
-    }
     setSaving(true);
     try {
       const payload = { ...settings };
-      try {
-        payload.asset_classes = JSON.parse(assetClassesText || '[]');
-      } catch {
-        payload.asset_classes = settings.asset_classes || [];
+      if (assetClasses && assetClasses.length) {
+        payload.asset_classes = assetClasses.map(a => ({ code: a.code, name: a.name }));
+      } else {
+        if (jsonError) {
+          setError('Please fix asset classes JSON before saving');
+          setSaving(false);
+          return;
+        }
+        try {
+          payload.asset_classes = JSON.parse(assetClassesText || '[]');
+        } catch {
+          payload.asset_classes = settings.asset_classes || [];
+        }
       }
       const res = await assetsService.updateCapitalizationSettings(payload);
       setSettings(res);
       setAssetClassesText(JSON.stringify(res?.asset_classes || [], null, 2));
+      setAssetClasses((res?.asset_classes || []).map((c: any) => ({ code: c.code || '', name: c.name || '' })));
       toast.success('Settings saved');
     } catch (e: any) {
       setError(e.message || 'Failed to save');
@@ -106,13 +114,42 @@ export default function CapitalizationSettings() {
           </div>
 
           <div className="space-y-3">
-            <Label>Asset Classes (JSON)</Label>
-            <Textarea value={assetClassesText} onChange={(e: any) => onAssetClassesChange(e.target.value)} className="font-mono text-sm" />
-            {jsonError ? (
-              <div className="text-destructive text-sm">JSON error: {jsonError}</div>
-            ) : (
-              <div className="text-muted-foreground text-sm">Provide asset classes as a JSON array. Example: {'[{"code":"IT","name":"IT Equipment"}]'}</div>
-            )}
+            <div className="flex items-center justify-between">
+              <Label>Asset Classes</Label>
+              <div>
+                <Button size="sm" onClick={() => setAssetClasses([...assetClasses, { code: '', name: '' }])} className="flex items-center gap-2"><Plus className="h-4 w-4" />Add Class</Button>
+              </div>
+            </div>
+
+            <div className="border rounded-md overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="p-2 text-left">Code</th>
+                    <th className="p-2 text-left">Name</th>
+                    <th className="p-2"> </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {assetClasses.map((c, i) => (
+                    <tr key={i} className="border-t">
+                      <td className="p-2 w-36">
+                        <Input value={c.code} onChange={(e: any) => setAssetClasses(assetClasses.map((ac, idx) => idx === i ? { ...ac, code: e.target.value } : ac))} />
+                      </td>
+                      <td className="p-2">
+                        <Input value={c.name} onChange={(e: any) => setAssetClasses(assetClasses.map((ac, idx) => idx === i ? { ...ac, name: e.target.value } : ac))} />
+                      </td>
+                      <td className="p-2 text-center">
+                        <Button size="sm" variant="destructive" onClick={() => setAssetClasses(assetClasses.filter((_, idx) => idx !== i))}>
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {assetClasses.length === 0 && <div className="text-muted-foreground text-sm">No asset classes defined.</div>}
           </div>
         </div>
 
